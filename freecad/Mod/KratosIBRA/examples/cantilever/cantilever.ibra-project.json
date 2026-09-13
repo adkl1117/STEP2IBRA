@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "source_step": "cantilever.step",
+  "source_sha256": "554444042de8c7c373e82b65f16b368ca50ca8c5ca01f4e363f872f7c51c5af7",
+  "profile": "",
+  "units": "mm-N-s",
+  "materials": [
+    {
+      "id": 1,
+      "name": "Steel",
+      "young": 200000.0,
+      "poisson": 0.0,
+      "density": 7.85e-09,
+      "thickness": 0.1
+    }
+  ],
+  "patches": [
+    {
+      "face_id": 2,
+      "material_id": 1,
+      "element": "Shell3pElement",
+      "degree_u": 3,
+      "degree_v": 2,
+      "insert_u": 7,
+      "insert_v": 1,
+      "quadrature": 0
+    }
+  ],
+  "supports": [
+    {
+      "name": "Clamped_root",
+      "target_kind": "edge",
+      "target_id": 3,
+      "method": "strong",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "interval": [
+        0.0,
+        "End"
+      ],
+      "penalty": 10000000.0,
+      "clamp": true,
+      "side": "u0"
+    }
+  ],
+  "loads": [
+    {
+      "name": "End_line_force",
+      "target_kind": "edge",
+      "target_id": 5,
+      "variable": "LINE_LOAD",
+      "value": [
+        0.0,
+        0.0,
+        -0.001
+      ],
+      "interval": [
+        0.0,
+        "End"
+      ]
+    }
+  ],
+  "initial_conditions": [],
+  "couplings": [],
+  "solver": {
+    "type": "static",
+    "analysis_type": "linear",
+    "start_time": 0.0,
+    "end_time": 1.0,
+    "time_step": 1.0
+  },
+  "output": {
+    "vtk": true,
+    "refinement": 4
+  }
+}
