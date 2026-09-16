@@ -2,7 +2,9 @@
 
 A native FreeCAD workbench for **isogeometric B-rep analysis (IBRA)**. Import STEP geometry, assign shell or membrane formulations, materials, refinement, boundary and initial conditions, and export a complete Kratos structural analysis model.
 
-**Branch:** `freecad-ibra-preprocessor` · **Version:** 0.2.0
+**Branch:** `freecad-ibra-preprocessor` · **Version:** V0.2 (0.2.0)
+
+[V0.2 update notes / V0.2 更新说明](CHANGELOG.md) — Boundary Conditions, optional refinement with a persisted enable switch, and automatic workbench registration.
 
 [Installation — English](docs/Installation_en.md) · [安装指南 — 中文](docs/Installation_zh.md)
 

@@ -2,6 +2,12 @@
 
 Distribution: 0.2.0. Validation date: 2026-09-13.
 
+## V0.2 update verification — 2026-09-16
+
+The updated distribution uses the same core dependency versions with Python 3.11.9 and FreeCAD 1.1.3 on Windows x64. The regression suite now contains 27 tests (15 analysis/export, 9 geometry and 3 portability). Added checks cover disabled refinement using four original control points in real Kratos initialization, rejection of insufficient original shell degrees, persisted disabled state, re-enabling and legacy compatibility. The original cantilever analytical solution remains covered.
+
+Native FreeCAD checks exercise automatic workbench registration, the Boundary page, the refinement checkbox and the installed package's export behavior. The historical validation below describes the initial 24-test distribution. See [V0.2 release notes](../CHANGELOG.md) for the changes.
+
 ## Environment
 
 - Windows x64; FreeCAD 1.1.3 with its bundled Qt/PySide.

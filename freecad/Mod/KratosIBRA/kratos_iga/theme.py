@@ -25,6 +25,10 @@ def stylesheet():
     QPushButton#export { background: #172b48; border-color: #172b48; color: white; padding: 10px 14px; font-weight: 600; }
     QPushButton#export:hover { background: #264b73; }
     QPushButton#quiet { color: #7c8aa0; background: transparent; border-color: transparent; padding: 4px 7px; font-size: 11px; }
+    QPushButton#refinementToggle { text-align: left; padding: 10px 12px; font-weight: 600; }
+    QPushButton#refinementToggle:checked { background: #dcf2eb; border-color: #9eddd0; color: #11826e; }
+    QTabWidget#boundaryTabs QTabBar::tab { padding: 9px 18px; margin-right: 6px; border-radius: 7px; background: #f3f5f9; color: #60738b; }
+    QTabWidget#boundaryTabs QTabBar::tab:selected { background: #dcf2eb; color: #11826e; }
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { min-height: 20px; padding: 6px 8px; color: #263b54; background: #f6f8fb; border: 1px solid #e1e7f0; border-radius: 7px; selection-background-color: #cdece4; selection-color: #125d52; }
     QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #48b9a2; background: white; }
     QLineEdit:read-only { color: #278578; background: #eef8f5; border-color: #d5ede7; }

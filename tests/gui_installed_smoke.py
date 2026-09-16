@@ -48,16 +48,28 @@ def inspect():
     try:
         assert panel.cache and len(panel.index["faces"])==1,panel.log.toPlainText()
         assert panel.check_project(),panel.log.toPlainText()
+        assert isinstance(panel.refinement_toggle, QtWidgets.QCheckBox)
+        assert panel.refinement_toggle.isChecked()  # Preserve the legacy example's refinement.
+        panel.refinement_toggle.click()
+        assert panel.refinement_content.isHidden()
+        panel.sync()
+        assert panel.project["refinement_enabled"] is False
+        from kratos_iga.project import validate
+        assert any("refinement is disabled" in error for error in validate(panel.project, panel.index)[0])
+        panel.refinement_toggle.click()
+        assert not panel.refinement_content.isHidden()
+        assert panel.check_project(),panel.log.toPlainText()
+        assert panel.boundary_tabs.count() == 2
         panel.save_backend_configuration()
         assert (user/"IBRA/backend.json").exists()
         Gui.Selection.addSelection(panel.doc.Name,panel.entities[("face",2)],"Vertex1")
         assert panel.selections()[0]["side"] in ("00","10","01","11")
         panel.setFloating(True)
         panel.resize(820,920)
-        panel.tabs.setCurrentIndex(7)
+        panel.tabs.setCurrentIndex(next(i for i in range(panel.tabs.count()) if panel.tabs.tabText(i) == "Analysis"))
         QtWidgets.QApplication.processEvents()
         panel.grab().save(str(user/"installed_output.png"))
-        panel.tabs.setCurrentIndex(3)
+        panel.tabs.setCurrentIndex(next(i for i in range(panel.tabs.count()) if panel.tabs.tabText(i) == "Boundary"))
         panel.edit_condition("supports",0)
         QtWidgets.QApplication.processEvents()
         panel.grab().save(str(user/"installed_supports.png"))

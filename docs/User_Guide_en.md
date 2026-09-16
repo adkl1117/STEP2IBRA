@@ -10,7 +10,7 @@ Start with the [installation guide](Installation_en.md). It covers a separate Py
 
 After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. The Geometry page includes **Open Cantilever Example**, which loads a configured model from the installed workbench.
 
-The dock can be resized, detached and scrolled. Numbered navigation covers Geometry, Materials, Refinement, Support, Loads, Initial, Interfaces and Output. Validation, export and cancellation remain at the bottom. Backend configuration persists under the FreeCAD user directory in `IBRA/backend.json`; generated data use `IBRA-work` by default. Save path changes using **Save Backend Configuration**.
+The dock can be resized, detached and scrolled. Numbered navigation covers Geometry, Materials, Boundary, Initial, Interfaces and Output. Boundary contains Support and Loads tabs. The checkbox after Refinement in Geometry enables refinement and expands its settings; clearing it disables refinement and hides the settings. Validation, export and cancellation remain at the bottom. Backend configuration persists under the FreeCAD user directory in `IBRA/backend.json`; generated data use `IBRA-work` by default. Save path changes using **Save Backend Configuration**.
 
 ## 2. Geometry import and entity assignment
 
@@ -26,7 +26,7 @@ Changing a display object's shape or placement invalidates export. Save modified
 
 ## 3. Constitutive properties and units
 
-The Materials page provides unique ID, name, Young's modulus, Poisson's ratio, density and thickness. The current constitutive law is isotropic linear elasticity under plane stress. Assign material IDs to patches on the Refinement page.
+The Materials page provides unique ID, name, Young's modulus, Poisson's ratio, density and thickness. The current constitutive law is isotropic linear elasticity under plane stress. Use its Patch Assignments table to assign materials, element formulations and quadrature settings even when refinement is disabled.
 
 Young's modulus, density and thickness must be finite and positive. Poisson's ratio must lie strictly between −1 and 0.5. Material IDs must be unique.
 
@@ -43,6 +43,8 @@ Default steel density is `7.85e-9` tonne/mm³. Changing units scales geometry du
 
 Each imported analysis patch requires exactly one material and element-formulation assignment.
 
+New projects have refinement disabled. Check Refinement in Geometry to enable degree elevation and knot insertion. When disabled, export preserves the original degrees and control points and omits RefinementModeler. Stored refinement settings are retained for re-enabling, and the switch is saved with the project. Legacy projects without the switch retain their original refinement behavior. If the original degrees are insufficient for the chosen formulation, validation blocks export and requests refinement instead of silently elevating the geometry.
+
 | Setting | Interpretation |
 | --- | --- |
 | Kirchhoff–Love Shell | Minimum degree 2 and internal basis continuity of at least C¹ |
@@ -57,7 +59,7 @@ Refinement means knot insertion and degree elevation in the spline approximation
 
 ## 5. Essential boundary conditions
 
-The Support page provides strong and penalty enforcement of prescribed displacements.
+Boundary → Support provides strong and penalty enforcement of prescribed displacements.
 
 **Strong enforcement:** select displacement components and enter prescribed values. Unchecked components remain unconstrained by that condition. For a patch, Parametric Location selects a natural boundary, a natural corner or all control points. For a one-sided edge, the preprocessor verifies that the entire curve represents a complete natural parametric boundary.
 
@@ -69,7 +71,7 @@ Natural boundaries and corners identify control-net locations, not arbitrary par
 
 ## 6. Loads and initial fields
 
-The Loads page supports constant vectors and active time intervals:
+Boundary → Loads supports constant vectors and active time intervals:
 
 - `LINE_LOAD`: select a one-sided boundary and specify force per unit length.
 - `SURFACE_LOAD`: select a patch and specify force per unit area.

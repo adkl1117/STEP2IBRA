@@ -121,7 +121,7 @@ class Panel(W.QDockWidget):
         brand_text.addWidget(caption)
         brand_layout.addLayout(brand_text)
         brand_layout.addStretch()
-        badge = W.QLabel("KRATOS")
+        badge = W.QLabel("KRATOS Multiphysics")
         badge.setObjectName("brandTag")
         brand_layout.addWidget(badge)
         layout.addWidget(brand)
@@ -151,9 +151,7 @@ class Panel(W.QDockWidget):
         self.tabs.currentChanged.connect(self.navigation.setCurrentRow)
         self.build_geometry()
         self.build_materials()
-        self.build_patches()
-        self.build_supports()
-        self.build_loads()
+        self.build_boundary()
         self.build_initial()
         self.build_couplings()
         self.build_output()
@@ -199,14 +197,16 @@ class Panel(W.QDockWidget):
         layout = W.QVBoxLayout(page)
         layout.setContentsMargins(16, 15, 16, 15)
         layout.setSpacing(10)
-        titles = [("GEOMETRY", "Geometry and Topology", "Geometry"), ("MATERIALS", "Constitutive Properties", "Materials"),
-                  ("DISCRETIZATION", "Discretization and Refinement", "Refinement"), ("SUPPORTS", "Essential Boundary Conditions", "Support"),
-                  ("LOADS", "Loads", "Loads"), ("INITIAL STATE", "Initial Conditions", "Initial"),
-                  ("INTERFACES", "Patch Interfaces", "Interfaces"), ("ANALYSIS", "Analysis and Output", "Output")]
+        titles = {"Geometry": ("GEOMETRY", "Geometry and Topology", "Geometry"),
+                  "Materials": ("MATERIALS", "Constitutive Properties", "Materials"),
+                  "Boundary": ("BOUNDARY", "Boundary Conditions", "Boundary"),
+                  "Initial": ("INITIAL STATE", "Initial Conditions", "Initial"),
+                  "Interfaces": ("INTERFACES", "Patch Interfaces", "Interfaces"),
+                  "Analysis": ("ANALYSIS", "Analysis and Output", "Output")}
         number = self.tabs.count()
-        eyebrow = W.QLabel(titles[number][0])
+        eyebrow = W.QLabel(titles[title][0])
         eyebrow.setObjectName("eyebrow")
-        heading = W.QLabel(titles[number][1])
+        heading = W.QLabel(titles[title][1])
         heading.setObjectName("sectionTitle")
         layout.addWidget(eyebrow)
         layout.addWidget(heading)
@@ -214,7 +214,7 @@ class Panel(W.QDockWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         self.tabs.addTab(scroll, title)
-        self.navigation.addItem(f"{number+1:02}  {titles[number][2]}")
+        self.navigation.addItem(f"{number+1:02}  {titles[title][2]}")
         return layout
 
     def table(self, headers):
@@ -230,7 +230,9 @@ class Panel(W.QDockWidget):
 
     def build_geometry(self):
         layout = self.page("Geometry")
+        layout.setAlignment(QtCore.Qt.AlignTop)
         self.geometry_table = self.table(["Type", "BRep ID", "Patch IDs / Degrees"])
+        self.geometry_table.setMaximumHeight(240)
         self.geometry_table.setEditTriggers(W.QAbstractItemView.NoEditTriggers)
         self.geometry_table.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         self.geometry_table.itemSelectionChanged.connect(self.select_table_geometry)
@@ -244,10 +246,30 @@ class Panel(W.QDockWidget):
         layout.addWidget(self.profile)
         layout.addWidget(button("Select Conversion Profile", self.choose_profile))
         layout.addWidget(text_hint("Reimport after changing the profile. Face exclusion and duplicate-face handling follow the configured conversion pipeline."))
+        refinement_header = W.QHBoxLayout()
+        refinement_header.addWidget(W.QLabel("Refinement"))
+        self.refinement_toggle = W.QCheckBox()
+        self.refinement_toggle.setAccessibleName("Enable Refinement")
+        self.refinement_toggle.setToolTip("Enable degree elevation and knot insertion. Unchecked uses the original geometry without refinement.")
+        self.refinement_toggle.toggled.connect(self.toggle_refinement)
+        refinement_header.addWidget(self.refinement_toggle)
+        refinement_header.addStretch()
+        layout.addLayout(refinement_header)
+        self.refinement_content = W.QWidget()
+        refinement_layout = W.QVBoxLayout(self.refinement_content)
+        refinement_layout.setContentsMargins(0, 8, 0, 0)
+        self.build_patches(refinement_layout)
+        layout.addWidget(self.refinement_content)
+        self.refinement_content.hide()
+        layout.addStretch(1)
+
+    def toggle_refinement(self, expanded):
+        self.refinement_content.setVisible(expanded)
+        self.project["refinement_enabled"] = expanded
 
     def build_materials(self):
         layout = self.page("Materials")
-        layout.addWidget(text_hint("Constitutive law: isotropic linear elasticity under plane stress. Assign material IDs to patches in Discretization."))
+        layout.addWidget(text_hint("Constitutive law: isotropic linear elasticity under plane stress. Assign material IDs and element formulations to patches below."))
         self.material_table = self.table(["ID", "Name", "E", "ν", "ρ", "Thickness"])
         layout.addWidget(self.material_table)
         row = W.QHBoxLayout()
@@ -258,11 +280,16 @@ class Panel(W.QDockWidget):
         self.units.addItems(["mm-N-s", "m-N-s"])
         layout.addWidget(self.units)
         layout.addWidget(text_hint("OCCT imports STEP coordinates in mm. The m-N-s system scales exported geometry by 0.001. Enter consistent material, thickness and load values. Density in mm-N-s is expressed in tonne/mm³."))
+        layout.addWidget(W.QLabel("Patch Assignments"))
+        self.assignment_table = self.table(["Face", "Material ID", "Element", "GP"])
+        layout.addWidget(self.assignment_table)
+        layout.addWidget(text_hint("These assignments remain active when Refinement is disabled. GP = 0 uses default quadrature."))
 
-    def build_patches(self):
-        layout = self.page("Discretization")
+    def build_patches(self, layout):
         layout.addWidget(text_hint("Degrees p/q are target polynomial degrees. h-u/h-v specify knot insertions per existing span. GP = 0 retains the default quadrature rule."))
         self.patch_table = self.table(["Face", "Material ID", "Element", "p", "q", "h-u", "h-v", "GP"])
+        for column in (1, 2, 7):
+            self.patch_table.setColumnHidden(column, True)
         layout.addWidget(self.patch_table)
         self.bulk_material = spin(1,1,9999)
         self.bulk_element = element_selector()
@@ -286,8 +313,9 @@ class Panel(W.QDockWidget):
         layout.addLayout(row)
         layout.addWidget(text_hint("The shell formulation requires degree ≥ 2 and internal C¹ continuity. Degree elevation preserves existing C⁰ continuity. Membranes require degree ≥ 1. Beam and volumetric formulations are outside the current scope."))
 
-    def condition_common(self, category, title):
-        layout = self.page(title)
+    def condition_common(self, category, title, layout=None):
+        if layout is None:
+            layout = self.page(title)
         target = W.QLineEdit()
         target.setReadOnly(True)
         target.setPlaceholderText("Select geometric entities, then assign the selection.")
@@ -325,8 +353,20 @@ class Panel(W.QDockWidget):
         layout.addWidget(text_hint("Double-click a condition to edit it. New exits the current edit mode."))
         setattr(self, category+"_list", items)
 
-    def build_supports(self):
-        layout, form = self.condition_common("supports", "Support")
+    def build_boundary(self):
+        layout = self.page("Boundary")
+        self.boundary_tabs = W.QTabWidget()
+        self.boundary_tabs.setObjectName("boundaryTabs")
+        for title, builder in [("Support", self.build_supports), ("Loads", self.build_loads)]:
+            section = W.QWidget()
+            section_layout = W.QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 12, 0, 0)
+            builder(section_layout)
+            self.boundary_tabs.addTab(section, title)
+        layout.addWidget(self.boundary_tabs)
+
+    def build_supports(self, layout):
+        layout, form = self.condition_common("supports", "Support", layout)
         self.support_method = W.QComboBox()
         self.support_method.addItems(["Strong Enforcement | Control Points", "Penalty Enforcement | Boundary XYZ"])
         form.addRow("Enforcement", self.support_method)
@@ -374,6 +414,8 @@ class Panel(W.QDockWidget):
             face = faces[int(self.patch_table.item(row,0).text())]
             self.patch_table.item(row,1).setText(str(self.bulk_material.value()))
             self.patch_table.cellWidget(row,2).setCurrentText(self.bulk_element.currentText())
+            self.assignment_table.item(row,1).setText(str(self.bulk_material.value()))
+            self.assignment_table.cellWidget(row,2).setCurrentText(self.bulk_element.currentText())
             minimum = max(self.bulk_degree.value(), 2 if self.bulk_element.currentData()=="Shell3pElement" else 1)
             for col, degree in zip((3,4),face["degrees"]):
                 self.patch_table.item(row,col).setText(str(max(minimum,degree)))
@@ -381,8 +423,8 @@ class Panel(W.QDockWidget):
                 self.patch_table.item(row,col).setText(str(self.bulk_h.value()))
         self.status.setText(f"Material, formulation and refinement updated for {len(rows)} patches.")
 
-    def build_loads(self):
-        layout, form = self.condition_common("loads", "Loads")
+    def build_loads(self, layout):
+        layout, form = self.condition_common("loads", "Loads", layout)
         self.load_variable = W.QComboBox()
         self.load_variable.addItems(["LINE_LOAD", "SURFACE_LOAD", "DEAD_LOAD"])
         form.addRow("Variable", self.load_variable)
@@ -627,10 +669,16 @@ class Panel(W.QDockWidget):
         for m in self.project["materials"]:
             self.table_row(self.material_table, [m[k] for k in ("id", "name", "young", "poisson", "density", "thickness")])
         self.patch_table.setRowCount(0)
+        self.assignment_table.setRowCount(0)
         for p in self.project["patches"]:
             element = element_selector()
             element.setCurrentIndex(element.findData(p["element"]))
             self.table_row(self.patch_table, [p["face_id"], p["material_id"], element, p["degree_u"], p["degree_v"], p["insert_u"], p["insert_v"], p["quadrature"]], (0,))
+            assignment_element = element_selector()
+            assignment_element.setCurrentIndex(assignment_element.findData(p["element"]))
+            self.table_row(self.assignment_table, [p["face_id"], p["material_id"], assignment_element, p["quadrature"]], (0,))
+        self.refinement_toggle.setChecked(self.project.get("refinement_enabled", True))
+        self.refinement_content.setVisible(self.refinement_toggle.isChecked())
         edges = {e["id"]: e for e in self.index["edges"]}
         self.coupling_table.setRowCount(0)
         for c in self.project["couplings"]:
@@ -648,7 +696,7 @@ class Panel(W.QDockWidget):
         self.vtk.setChecked(self.project["output"]["vtk"])
         self.output_refinement.setValue(self.project["output"]["refinement"])
         self.summary.setText(f"{Path(self.project['source_step']).name}   |   Patches: {len(self.index['faces'])}   |   Interfaces: {len(self.project['couplings'])}")
-        for table in (self.geometry_table, self.material_table, self.patch_table, self.coupling_table):
+        for table in (self.geometry_table, self.material_table, self.assignment_table, self.patch_table, self.coupling_table):
             table.resizeColumnsToContents()
 
     def sync(self):
@@ -664,9 +712,11 @@ class Panel(W.QDockWidget):
             return table.item(row, col).text().strip()
         self.project["materials"] = [{"id": int(cell(self.material_table, r, 0)), "name": cell(self.material_table, r, 1),
             **{key: float(cell(self.material_table, r, c)) for c, key in enumerate(("young", "poisson", "density", "thickness"), 2)}} for r in range(self.material_table.rowCount())]
-        self.project["patches"] = [{"face_id": int(cell(self.patch_table, r, 0)), "material_id": int(cell(self.patch_table, r, 1)),
-            "element": self.patch_table.cellWidget(r, 2).currentData(),
-            **{key: int(cell(self.patch_table, r, c)) for c, key in enumerate(("degree_u", "degree_v", "insert_u", "insert_v", "quadrature"), 3)}} for r in range(self.patch_table.rowCount())]
+        self.project["refinement_enabled"] = self.refinement_toggle.isChecked()
+        self.project["patches"] = [{"face_id": int(cell(self.patch_table, r, 0)), "material_id": int(cell(self.assignment_table, r, 1)),
+            "element": self.assignment_table.cellWidget(r, 2).currentData(),
+            "quadrature": int(cell(self.assignment_table, r, 3)),
+            **{key: int(cell(self.patch_table, r, c)) for c, key in enumerate(("degree_u", "degree_v", "insert_u", "insert_v"), 3)}} for r in range(self.patch_table.rowCount())]
         self.project["couplings"] = [{"edge_id": int(cell(self.coupling_table, r, 0)), "enabled": self.coupling_table.cellWidget(r, 2).isChecked(),
             "penalty": float(cell(self.coupling_table, r, 3)), "rotation": self.coupling_table.cellWidget(r, 4).isChecked()} for r in range(self.coupling_table.rowCount())]
         self.project["units"] = self.units.currentText()

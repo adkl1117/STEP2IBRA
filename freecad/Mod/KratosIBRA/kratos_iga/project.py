@@ -48,6 +48,7 @@ def new_project():
     return {"schema_version": SCHEMA, "source_step": "", "source_sha256": "", "profile": "",
             "units": "mm-N-s", "materials": [{"id": 1, "name": "Steel", "young": 210000.0,
                 "poisson": 0.3, "density": 7.85e-9, "thickness": 1.0}],
+            "refinement_enabled": False,
             "patches": [], "supports": [], "loads": [], "initial_conditions": [],
             "couplings": [], "solver": {"type": "static", "analysis_type": "linear",
                 "start_time": 0.0, "end_time": 1.0, "time_step": 1.0},
@@ -75,6 +76,8 @@ def validate(project, index):
     require(project.get("source_sha256") == index.get("source_sha256"), "The STEP checksum does not match the geometry cache. Reimport the source geometry.")
     require(project.get("geometry_sha256", index.get("geometry_sha256")) == index.get("geometry_sha256"), "Converted geometry has changed, possibly due to a modified profile. Reassign analysis conditions.")
     require(project.get("units") in ("mm-N-s", "m-N-s"), "Select a consistent unit system.")
+    refinement = project.get("refinement_enabled", True)  # Legacy projects always applied refinement.
+    require(type(refinement) is bool, "Refinement enabled must be a boolean.")
     faces = {f["id"]: f for f in index["faces"]}
     edges = {e["id"]: e for e in index["edges"]}
     materials = {m["id"]: m for m in project["materials"]}
@@ -92,6 +95,10 @@ def validate(project, index):
         require(p["element"] != "Shell3pElement" or min(faces[p["face_id"]].get("min_continuity", [99,99])) >= 1,
                 f"Patch {p['face_id']} has internal continuity C⁰ or lower; the shell requires C¹. Degree elevation does not improve existing continuity. Reparameterize, remove redundant knots where valid, or select a membrane formulation if physically appropriate.")
         for d, original in zip(("u", "v"), faces[p["face_id"]]["degrees"]):
+            if not refinement:
+                require(original >= ELEMENTS.get(p["element"], 1),
+                        f"Patch {p['face_id']}: refinement is disabled and the original degree is below the formulation minimum. Enable Refinement to elevate the degree.")
+                continue
             require(type(p["degree_"+d]) is int and max(original, ELEMENTS.get(p["element"], 1)) <= p["degree_"+d] <= 8,
                     f"Patch {p['face_id']}: target degrees must meet the original and formulation-specific minimum degrees and must not exceed 8.")
             require(type(p["insert_"+d]) is int and 0 <= p["insert_"+d] <= 100, "Knot insertions per span must be integers from 0 to 100.")

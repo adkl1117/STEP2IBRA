@@ -39,10 +39,11 @@ def make_bundle(project, cad, index):
         material = mat_map[patch["material_id"]]
         prop(f"Patch_{fid}", {"YOUNG_MODULUS": material["young"], "POISSON_RATIO": material["poisson"],
               "DENSITY": material["density"], "THICKNESS": material["thickness"], "PRESTRESS": [0., 0., 0.]}, material)
-        refinements.append({"brep_ids": [fid], "geometry_type": "NurbsSurface", "model_part_name": ROOT,
-            "parameters": {"increase_degree_u": patch["degree_u"]-face_map[fid]["degrees"][0],
-                "increase_degree_v": patch["degree_v"]-face_map[fid]["degrees"][1],
-                "insert_nb_per_span_u": patch["insert_u"], "insert_nb_per_span_v": patch["insert_v"]}})
+        if project.get("refinement_enabled", True):
+            refinements.append({"brep_ids": [fid], "geometry_type": "NurbsSurface", "model_part_name": ROOT,
+                "parameters": {"increase_degree_u": patch["degree_u"]-face_map[fid]["degrees"][0],
+                    "increase_degree_v": patch["degree_v"]-face_map[fid]["degrees"][1],
+                    "insert_nb_per_span_u": patch["insert_u"], "insert_nb_per_span_v": patch["insert_v"]}})
     for i, support in enumerate(project["supports"], 1):
         name = f"Support_{i}"
         values = support["value"]
@@ -97,6 +98,8 @@ def make_bundle(project, cad, index):
             {"modeler_name": "RefinementModeler", "Parameters": {"refinements_file_name": "refinements.iga.json"}},
             {"modeler_name": "IgaModeler", "Parameters": {"cad_model_part_name": ROOT, "analysis_model_part_name": ROOT, "physics_file_name": "physics.iga.json"}}],
         "processes": processes, "output_processes": {"output_process_list": []}}
+    if not project.get("refinement_enabled", True):
+        params["modelers"] = [m for m in params["modelers"] if m["modeler_name"] != "RefinementModeler"]
     if project["output"]["vtk"]:
         params["output_processes"]["output_process_list"].append(process("KratosMultiphysics.IgaApplication", "iga_vtk_output_process",
             {"model_part_name": ROOT, "output_file_name": "results", "brep_surface_ids": list(face_map),

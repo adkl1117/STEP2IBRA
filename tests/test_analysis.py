@@ -33,6 +33,43 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(result["geometry.cad.json"], self.cad)
         self.assertEqual(result["refinements.iga.json"]["refinements"][0]["parameters"]["increase_degree_u"], 2)
 
+    def test_refinement_disabled_uses_original_geometry(self):
+        p = deepcopy(self.base)
+        p["refinement_enabled"] = False
+        p["patches"][0]["element"] = "IgaMembraneElement"
+        saved_patches = deepcopy(p["patches"])
+        result = make_bundle(p, self.cad, self.index)
+        self.assertEqual(result["geometry.cad.json"], self.cad)
+        self.assertEqual(result["refinements.iga.json"]["refinements"], [])
+        self.assertNotIn("RefinementModeler", [m["modeler_name"] for m in result["ProjectParameters.json"]["modelers"]])
+        self.assertEqual(p["patches"], saved_patches)
+        with tempfile.TemporaryDirectory(dir=ROOT/"tests") as tmp:
+            folder = Path(tmp)/"case"
+            export_bundle(p, self.cad, self.index, folder)
+            run = subprocess.run([sys.executable, str(folder/"MainKratos.py"), "--check"], capture_output=True, text=True, timeout=90)
+            self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+            self.assertEqual(read_json(folder/"run_report.json")["nodes"], 4)
+            from kratos_iga.project import read_project
+            reopened = read_project(folder/"project.ibra-project.json")
+            self.assertFalse(reopened["refinement_enabled"])
+            reopened["refinement_enabled"] = True
+            self.assertTrue(make_bundle(reopened, self.cad, self.index)["refinements.iga.json"]["refinements"])
+
+    def test_refinement_disabled_rejects_low_degree_shell(self):
+        p = deepcopy(self.base)
+        p["refinement_enabled"] = False
+        self.assertTrue(any("refinement is disabled" in e for e in validate(p, self.index)[0]))
+
+    def test_new_projects_disable_refinement_and_legacy_preserves_it(self):
+        from kratos_iga.project import new_project
+        self.assertFalse(new_project()["refinement_enabled"])
+        p = deepcopy(self.base)
+        p.pop("refinement_enabled", None)
+        legacy = make_bundle(p, self.cad, self.index)
+        p["refinement_enabled"] = True
+        enabled = make_bundle(p, self.cad, self.index)
+        self.assertEqual(legacy["refinements.iga.json"], enabled["refinements.iga.json"])
+
     def test_metres_scale_only_physical_coordinates(self):
         p = deepcopy(self.base)
         p["units"] = "m-N-s"
