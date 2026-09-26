@@ -2,22 +2,20 @@
 
 A native FreeCAD workbench for **isogeometric B-rep analysis (IBRA)**. Import STEP geometry, assign shell or membrane formulations, materials, refinement, boundary and initial conditions, and export a complete Kratos structural analysis model.
 
-**Branch:** `freecad-ibra-preprocessor` · **Version:** V0.2 (0.2.0)
+**Branch:** `release/v0.5preview` · **Version:** V0.5preview (`0.5.0-preview`)
 
-[V0.2 update notes / V0.2 更新说明](CHANGELOG.md) — Boundary Conditions, optional refinement with a persisted enable switch, and automatic workbench registration.
+[V0.5preview release / V0.5preview 发布说明](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview) · [Change log](CHANGELOG.md) · [Validation](docs/Validation.md)
 
 [Installation — English](docs/Installation_en.md) · [安装指南 — 中文](docs/Installation_zh.md)
 
 [User guide — English](docs/User_Guide_en.md) · [使用说明 — 中文](docs/User_Guide_zh.md)
 
-![Native IBRA preprocessor](docs/images/interface.png)
-
 ## Download and configure
 
-Select this branch, then **Code → Download ZIP**, and extract it into a stable directory. Alternatively:
+Download the **V0.5preview** source archive from Releases and extract it into a stable directory. The V0.2 release remains available under its original tag. Alternatively, clone the preview branch:
 
 ```text
-git clone --branch freecad-ibra-preprocessor https://github.com/adkl1117/STEP2IBRA.git
+git clone --branch release/v0.5preview https://github.com/adkl1117/STEP2IBRA.git
 ```
 
 Follow the installation guide. It covers a separate Python 3.11 environment, dependency installation, an environment check, and copying the workbench into the exact FreeCAD user module directory. FreeCAD, OCCT and Kratos binaries are not included. The STEP conversion source **is bundled**, so no previous project or author-specific folder is required.
@@ -31,6 +29,10 @@ The verified platform is Windows x64 with FreeCAD 1.1.3. Other platforms require
 - Knot insertion, degree elevation and quadrature settings.
 - Essential boundary conditions, distributed loads and initial fields.
 - Penalty interface coupling, with optional rotational continuity for shells.
+- Named analysis groups, document association, geometry-change invalidation and explicit rebind guards.
+- Reference-configuration pressure loads and tabulated time amplitudes.
+- Read-only result display from Kratos IGA's native `results.vtkhdf` output.
+- Three schema-3 examples: a single-patch cantilever, a two-patch shell and a perforated trimmed plate.
 - Standalone Kratos export, initialization and solution.
 - English GUI and separate Chinese/English documentation.
 
@@ -41,7 +43,7 @@ The verified platform is Windows x64 with FreeCAD 1.1.3. Other platforms require
 ```text
 freecad/Mod/KratosIBRA/   Installable, self-contained workbench
   backend/cad_pipeline/  STEP conversion source
-  examples/cantilever/   Synthetic STEP and a portable configured project
+  examples/              V0.2 cantilever plus three V0.5preview STEP projects
   kratos_iga/            GUI, project validation and Kratos export
 scripts/                 Installation and example verification
 tests/                   Geometry, export, solver and portability tests
@@ -51,9 +53,9 @@ requirements-backend.txt Required backend packages
 
 ## Verification and scope
 
-The cantilever-shell example checks displacement against an analytical value of 0.02 mm. The test suite also exercises initial fields, timed loads, geometry checks, invalid configurations and relocation. See [validation evidence](docs/Validation.md) for the tested environment and reproducible commands.
+V0.5preview is a preview distribution based on the V0.2 tag. The accepted stage evidence covers the three shipped cases, native FreeCAD project round-trips and targeted result-viewer checks. See [validation evidence](docs/Validation.md) for the target environment and the scope of those checks.
 
-The current scope is surface shells and membranes. Independent beams, volumetric parameterization, solid elements, contact and general trimming-vertex point conditions are not implemented. Geometric interface detection does not determine connection mechanics; engineering use requires constraint, penalty and convergence studies.
+The current scope is surface shells and membranes. Independent beams, volumetric parameterization, solid elements, contact and general trimming-vertex point conditions are not implemented. Pressure acts on the reference configuration; follower pressure is unsupported. The result viewer cannot recover CAD Face/UV identities from native VTKHDF. Signed physical reactions from penalty conditions and full force equilibrium remain unverified. Geometric interface detection does not determine connection mechanics; engineering use requires constraint, penalty and convergence studies.
 
 ## License
 

@@ -60,9 +60,10 @@ An existing `KratosIBRA` directory is preserved rather than overwritten. For an 
 2. Open **Output → Analysis and Output**. Review Backend Python Executable, Conversion Pipeline Directory and Working Directory.
 3. Select **Check Backend Environment**. The log must report success.
 4. If you modify a path, select **Save Backend Configuration**. User overrides persist in `<user-directory>/IBRA/backend.json` and take precedence over installation defaults.
-5. Return to Geometry and select **Open Cantilever Example**. Conversion runs asynchronously; a surface patch and its boundaries should appear.
-6. Select **Validate Model**, then **Export Analysis Model** into a parent directory of your choice.
-7. In Output, select **Initialize Exported Model**, then **Run Exported Analysis**.
+5. Return to Geometry and select **Open Cantilever Example**. Conversion runs asynchronously; a surface patch and its boundaries should appear. This button remains the historical V0.2 example entry point.
+6. To preview a V0.5 case, select **Open Project** at the top of the panel and choose a `.ibra-project.json` under `examples/v0_5_cantilever`, `examples/two_patch` or `examples/perforated_plate` in the installed workbench.
+7. Select **Validate Model**, then **Export Analysis Model** into a parent directory of your choice.
+8. In Output, select **Initialize Exported Model**, then **Run Exported Analysis**.
 
 The example has a clamped root and an end line load. Its expected displacement magnitude is 0.02 mm. The complete workflow and model assumptions are explained in the [user guide](User_Guide_en.md).
 

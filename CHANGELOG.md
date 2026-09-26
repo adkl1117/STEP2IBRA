@@ -1,5 +1,11 @@
 # Changelog / 更新记录
 
+## V0.5preview — 2026-09-26
+
+Preview release based on the unchanged V0.2 tag. It adds staged IBRA pre-processing, safer project/entity binding, pressure and time-table support, native VTKHDF result display, and three editable schema-3 examples. See the [English](docs/V0.5preview_RELEASE_NOTES.md) and [中文](docs/V0.5preview_RELEASE_NOTES_zh.md) release notes for scope and known limits.
+
+预览版以未改动的 V0.2 标签为基线，增加分阶段 IBRA 前处理、项目与实体绑定保护、压力和时间表、原生 VTKHDF 结果查看，以及三个可编辑的 schema-3 算例。功能范围和限制见[英文发布说明](docs/V0.5preview_RELEASE_NOTES.md)与[中文发布说明](docs/V0.5preview_RELEASE_NOTES_zh.md)。
+
 ## V0.2 — 2026-09-16
 
 This tag publishes the local UI and refinement updates to the 0.2.0 distribution.

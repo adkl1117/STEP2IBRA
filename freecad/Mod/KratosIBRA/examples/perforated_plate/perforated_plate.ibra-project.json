@@ -1,0 +1,114 @@
+{
+  "schema_version": 3,
+  "source_step": "perforated_plate.step",
+  "source_sha256": "5b3a5226a22bd62bd91dec014f2ea883a20a40bfa781d375496acbd18fd8500b",
+  "geometry_sha256": "905ba46918da8c648de720f09d8b7eb759525eecd3f83a646760bb9e7886088b",
+  "profile": "",
+  "units": "mm-N-s",
+  "materials": [
+    {
+      "id": 1,
+      "name": "Steel",
+      "young": 200000.0,
+      "poisson": 0.0,
+      "density": 7.85e-09
+    }
+  ],
+  "sections": [
+    {
+      "id": 1,
+      "name": "Steel 0.1 mm",
+      "thickness": 0.1
+    }
+  ],
+  "refinement_enabled": true,
+  "patches": [
+    {
+      "face_id": 2,
+      "material_id": 1,
+      "section_id": 1,
+      "element": "Shell3pElement",
+      "active": true,
+      "degree_u": 2,
+      "degree_v": 2,
+      "insert_u": 1,
+      "insert_v": 1,
+      "quadrature": 0
+    }
+  ],
+  "groups": [],
+  "supports": [
+    {
+      "name": "Clamped_root",
+      "target_kind": "edge",
+      "target_id": 6,
+      "side": "u0",
+      "method": "strong",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clamp": true,
+      "interval": [
+        0.0,
+        "End"
+      ]
+    },
+    {
+      "name": "Hole_edge_cut_support",
+      "target_kind": "edge",
+      "target_id": 7,
+      "method": "penalty",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "penalty": 10000000.0,
+      "interval": [
+        0.0,
+        "End"
+      ]
+    }
+  ],
+  "loads": [
+    {
+      "kind": "reference_pressure",
+      "name": "Top_pressure",
+      "target_kind": "face",
+      "target_id": 2,
+      "pressure": 0.001,
+      "normal_flip": false,
+      "interval": [
+        0.0,
+        "End"
+      ],
+      "amplitude": {
+        "points": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.0
+          ]
+        ]
+      }
+    }
+  ],
+  "initial_conditions": [],
+  "couplings": [],
+  "solver": {
+    "type": "static",
+    "analysis_type": "linear",
+    "start_time": 0.0,
+    "end_time": 1.0,
+    "time_step": 1.0
+  },
+  "output": {
+    "vtk": true,
+    "refinement": 4
+  }
+}

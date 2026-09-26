@@ -1,6 +1,6 @@
 # IBRA Preprocessor for Kratos — User Guide
 
-Version 0.2.0.
+Version 0.5.0-preview.
 
 This native FreeCAD workbench supports preprocessing for **isogeometric B-rep analysis (IBRA)**: import exact CAD geometry, assign constitutive properties and discretization parameters, prescribe boundary and initial conditions, and export structural analysis models for Kratos. The interface uses terminology from computational structural mechanics and the finite element method.
 
@@ -8,7 +8,7 @@ This native FreeCAD workbench supports preprocessing for **isogeometric B-rep an
 
 Start with the [installation guide](Installation_en.md). It covers a separate Python 3.11 environment, dependency verification and installation into the FreeCAD user module directory. This distribution includes the STEP conversion source and does not require a previous project.
 
-After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. The Geometry page includes **Open Cantilever Example**, which loads a configured model from the installed workbench.
+After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. To open a V0.5 example, use **Open Project** at the top of the panel and select a project under the installed workbench's `examples` directory. **Open Cantilever Example** remains the historical V0.2 example entry point.
 
 The dock can be resized, detached and scrolled. Numbered navigation covers Geometry, Materials, Boundary, Initial, Interfaces and Output. Boundary contains Support and Loads tabs. The checkbox after Refinement in Geometry enables refinement and expands its settings; clearing it disables refinement and hides the settings. Validation, export and cancellation remain at the bottom. Backend configuration persists under the FreeCAD user directory in `IBRA/backend.json`; generated data use `IBRA-work` by default. Save path changes using **Save Backend Configuration**.
 
@@ -71,13 +71,17 @@ Natural boundaries and corners identify control-net locations, not arbitrary par
 
 ## 6. Loads and initial fields
 
-Boundary → Loads supports constant vectors and active time intervals:
+Boundary → Loads supports constant vectors, reference-normal pressure, and an optional piecewise-linear amplitude table:
 
 - `LINE_LOAD`: select a one-sided boundary and specify force per unit length.
 - `SURFACE_LOAD`: select a patch and specify force per unit area.
 - `DEAD_LOAD`: integrated over the selected geometric measure; interpret units consistently with the target dimension.
+- **Reference (dead) pressure**: select a patch or face group, enter a signed scalar `p`, and use the explicit `normal_flip` to reverse it. The positive direction is the normalised parametric `∂P/∂u × ∂P/∂v` direction (`du × dv`), **not** the OCCT/CAD outward normal. This stage supports faces/face groups only and does not support follower/current-normal pressure.
+- **Amplitude table** (optional, for vectors and pressure): `[[t, f], ...]` with at least two points, strictly increasing finite times and no auto-sorting; the table domain must lie inside both the analysis interval and the load interval (narrower is allowed); stored endpoints are used and values outside the table are zero. Factors and times are not unit-converted, and **table times do not add solver time steps** — align the key times with your time increment yourself.
 
-The active interval must lie within the analysis interval. `End` denotes analysis end time. Loads are explicitly zero outside their active interval. Arbitrary spatial expressions and time histories are outside the current scope.
+The active interval must lie within the analysis interval. `End` denotes analysis end time. Loads are explicitly zero outside their active interval. Arbitrary spatial expressions and time histories are outside the current scope. Pressure takes its reference normal from the parametric `du × dv` on the **X0 reference configuration**. Unit conversion follows the export direction: **mm→m** scales pressure by ×1e6 and line load by ×1000; **m→mm** uses the reciprocals; amplitude-table numbers are unchanged. Follower/current-normal pressure is unsupported in **both linear and nonlinear** analysis.
+
+In static linear analysis each pseudo-time is an independent reference load case, and that behaviour applies **only through the exported `MainKratos.py`** (`CheckedAnalysis.InitializeSolutionStep`, which resets X0 and zeroes displacement before BCs/loads/Predict); dynamic and nonlinear analysis preserve their real history and are not reset. The linear `Shell3pElement` performs a single residual iteration per step, so its `REACTION` may carry substantial transverse error — **accurate reactions require converged nonlinear analysis**.
 
 Initial displacement, velocity and acceleration are assigned to all control points of a patch once during initialization, without fixing degrees of freedom. Velocity and acceleration require dynamic analysis. Nonzero initial displacement requires nonlinear analysis.
 
@@ -96,7 +100,7 @@ Review detected interfaces against the physical structure. The penalty factor is
 3. Enable displacement output if required. Visualization subdivision ranges from 1 to 100 and is independent of analysis refinement.
 4. Select **Validate Model** and inspect errors and notices. Correct errors before export.
 5. Select **Export Analysis Model** and choose a parent directory. A unique `ibra_case_*` subdirectory preserves existing models.
-6. Use **Initialize Exported Model**, then **Run Exported Analysis**. Logs are written to the working directory's `jobs` folder.
+6. Use **Initialize Exported Model**, then **Run Exported Analysis**. Each run creates a separate `ibra_run_*` directory under the export; logs are written to the working directory's `jobs` folder.
 
 | File | Purpose |
 | --- | --- |
@@ -121,18 +125,24 @@ Exported models run independently of FreeCAD but require the backend dependencie
 
 Initialization does not prove adequate constraints or solver convergence. Successful solution does not replace discretization, penalty-parameter or engineering convergence studies.
 
-## 9. Project persistence
+## 9. Viewing results
+
+After a solve, select its `ibra_run_*` directory in the Output page's result section and click **Load Result Metadata**. Choose a recorded step, displacement component X/Y/Z or magnitude, and deformation scale, then click **Draw Result Frame**. Scale 0 displays the reference position. **Clear Result Display** removes the temporary result layer and restores the original CAD display. Changing the model or refusing a result from a different model clears any old result. The viewer reads only the native `results.vtkhdf` written by Kratos IGA in that run; initialization alone produces no drawable result.
+
+The panel reports extrema and their positions, strong-support reactions, actual applied-load resultant, raw penalty-condition contributions, and four distinct evidence levels. A signed physical reaction for penalty conditions is currently `unavailable`; balance for such cases is `unverified`. Native VTKHDF has no face/UV correspondence, so that mapping is explicitly unavailable. The result layer does not change CAD Shapes, project bindings or analysis inputs.
+
+## 10. Project persistence
 
 **Save Project** writes `.ibra-project.json`. Reopening reconverts the original STEP and checks source and converted-geometry checksums. Legacy `.iga-project.json` files remain accessible through the generic **Project JSON** file filter.
 
-An analysis project is separate from a FreeCAD document: `.FCStd` alone does not preserve the complete analysis configuration. Referenced STEP files, profiles and backend paths must remain available. Project paths are stored relative to the project file where possible. Move the STEP/profile files with the project or update the references after relocation. Geometry changes still require reassignment and verification.
+Current P0-3 behaviour: pressing **Ctrl+S** to save the `.FCStd` document associates the saved analysis project with that document, and reopening the document restores that association — a separate `.ibra-project.json` save is no longer required to continue. When the geometry changes, existing bindings/conditions must be rebound first; the geometry-change protection blocks reusing stale conditions and the pending rebind guards report what is required. Referenced STEP files, profiles and backend paths must still remain available, and project paths are stored relative to the project file where possible. Move the STEP/profile files with the project or update the references after relocation.
 
-## 10. Example and scope
+## 11. Example and scope
 
-The cantilever shell has length 10 mm, width 1 mm, thickness 0.1 mm, Young's modulus 200000 N/mm² and Poisson's ratio 0. Its root is clamped and its end line load is −0.001 N/mm. Analytical tip displacement is −0.02 mm; the verified displacement magnitude is approximately 0.0200000000008 mm.
+V0.5 includes three separate schema-3 projects, opened through **Open Project**:
 
-A two-patch cantilever with displacement and rotational coupling yields approximately 0.0200000031 mm, with relative analytical error approximately 1.56×10⁻⁷. The original two-patch input was solved as a membrane. Wing verification covers conversion and indexing of 22 patches and 81 interfaces only; no wing structural solution has been validated.
+- `examples/v0_5_cantilever/`: a 10 mm × 1 mm single-patch cantilever with 0.1 mm thickness. Its measured maximum displacement is approximately 0.0200000000008 mm against the 0.02 mm analytical value.
+- `examples/two_patch/`: a continuous two-patch shell. Its measured maximum displacement is approximately 0.1600031 mm against a 0.16 mm single-patch reference. The measured interface displacement jump is about 1.0×10⁻¹¹ mm and the normal-angle difference about 1.0×10⁻¹⁰ rad.
+- `examples/perforated_plate/`: a trimmed plate with a true closed hole. The refined case has approximately 32 mm² reference area and a measured assembled pressure resultant of 0.032 N in z. The unrefined variant is rejected by the integration-area guard as expected.
 
-This version does not provide independent beams or cables, volumetric parameterization, solid elements, contact, multiphysics coupling, general trimming-point supports, arbitrary space/time expressions or result-field display inside FreeCAD. Kratos 10.4.3 visualization samples the background surface; verify trimming holes and boundaries independently rather than inferring the integration domain from the display mesh. Repeated solution may append visualization time data; export to a fresh directory for independent runs.
-
-Portable tests are in the repository `tests` directory. The installed `examples/cantilever` directory contains the STEP and relative-path project. See [validation evidence](Validation.md); the historical wing model is not distributed here.
+This preview does not provide independent beams or cables, volumetric parameterization, solid elements, contact, multiphysics coupling, general trimming-point supports or arbitrary space/time expressions. Pressure acts on the reference configuration; follower pressure is unsupported. Native VTKHDF cannot recover CAD Face/UV identities; signed physical reactions from penalty conditions and full force equilibrium remain unverified. Interactive rebinding after arbitrary geometry edits, exact nonlinear support reactions and the target C++ condition's internal `diff_phi` are also outside this acceptance scope. Each solve uses a new isolated run directory. See [validation evidence](Validation.md) and the [V0.5preview Release](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview).

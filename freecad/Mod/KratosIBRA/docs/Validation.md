@@ -1,55 +1,36 @@
 # Validation record
 
-Distribution: 0.2.0. Validation date: 2026-09-13.
+Distribution: 0.5.0-preview. Validation date: 2026-09-26.
 
-## Environment
+## Target environment
 
-- Windows x64; FreeCAD 1.1.3 with its bundled Qt/PySide.
-- A new external Python 3.11.7 virtual environment with `include-system-site-packages = false`.
-- Dependencies installed from `requirements-backend.txt`, without copying packages from the development environment.
-- OCP 7.8.1.1; Kratos core, Iga, StructuralMechanics and LinearSolvers applications 10.4.3.
-- The complete installed package set is recorded in `requirements-windows-lock.txt`.
+- Windows x64 and FreeCAD 1.1.3 with its bundled Qt/PySide.
+- Python 3.11.9, OCP 7.8.1.1, and Kratos core, Iga, StructuralMechanics and LinearSolvers 10.4.3.
+- Dependency pins are in `requirements-backend.txt`; the verified Windows environment is recorded in `requirements-windows-lock.txt`.
 
-## Checks completed
+## Acceptance summary
 
-1. Backend import and version check passed in the new virtual environment.
-2. The installer copied the workbench into an isolated user directory, including a path containing spaces.
-3. The installed package was imported in FreeCAD's native Python/Qt runtime and registered as `KratosIBRAWorkbench`.
-4. The installed, relative-path cantilever project was loaded through the GUI. Background STEP conversion, geometry indexing, model validation, natural-corner selection and persisted backend configuration passed.
-5. All **24 automated tests** passed: 12 analysis/export tests, 9 synthetic geometry tests and 3 project/configuration portability tests.
-6. The distributed command-line example converted its own STEP file, exported the complete model and solved it with the new backend.
+- P0-1 through P0-5 passed their staged contract and host acceptance, including real Kratos initialization/solution checks, FreeCAD document save/reopen, geometry invalidation and rebind guards, pressure integration checks, and time-table behavior.
+- P0-6 passed within its revised scope. The viewer reads only native Kratos IGA `results.vtkhdf`; target-FreeCAD checks covered all three V0.5 examples, an actual two-step result, wrong-model rejection, isolated runs, and clearing stale frames. Targeted result-viewer regression: 159 checks passed.
+- P0-7 passed for the three shipped schema-3 projects: single-patch cantilever, continuous two-patch shell, and perforated trimmed plate. Evidence includes real Kratos solves and checks against analytical or independent geometry/load references, plus target FreeCAD panel load/save/cross-process reopen.
+- Final backend regression: 415 tests passed, 54 skipped. This recorded run used the normal host process; a restricted sandbox is not a substitute for the Kratos DLL runtime.
 
-The GUI harness explicitly selects the installed package and redirects its configuration to a disposable test user directory. It does not rely on the pre-existing workbench, cache or conversion source.
+The values and checks above apply to the shipped examples and target software versions. They do not prove general engineering convergence or correctness for arbitrary STEP geometry.
 
-## Analytical cantilever result
+## Case results
 
-| Quantity | Value |
+| Case | Recorded check |
 | --- | --- |
-| Length / width / thickness | 10 / 1 / 0.1 mm |
-| Young's modulus / Poisson's ratio | 200000 N/mm² / 0 |
-| End line load | −0.001 N/mm |
-| Analytical tip displacement magnitude | 0.02 mm |
-| Computed maximum displacement magnitude | 0.02000000000080121 mm |
-| Relative error | 4.00605 × 10⁻¹¹ |
-| Control points / elements / conditions | 44 / 192 / 12 |
+| Single-patch cantilever | Maximum displacement `0.02000000000080121 mm` versus `0.02 mm` analytical value. |
+| Continuous two-patch shell | Maximum displacement `0.1600030769827438 mm` versus `0.16 mm` single-patch reference; measured interface jump `1.000045e-11 mm` and normal-angle difference `9.99922e-11 rad`. |
+| Perforated trimmed plate | Refined integration area `32.00000000000065 mm²`; 112 load-condition RHS values sum to approximately `[0, 0, 0.032] N`. An unrefined variant with an area mismatch is rejected by the guard. |
 
-## Reproduce
+## Known limits
 
-From the repository root, after backend installation:
+- VTKHDF does not contain enough information to recover CAD Face/UV identities. Result viewing adds no run-level input-hash value or manifest; existing project geometry-change invalidation remains in place.
+- Penalty-condition RHS is reported separately from strong-support reactions. Its signed physical-reaction convention has not been fully verified, so overall equilibrium involving penalty conditions remains unverified.
+- Pressure acts on the reference configuration. Follower pressure is unsupported. Automatic unit conversion for rotational coupling rejects unsupported cases.
+- The three cases passed panel data round-trips, but their interactive rebinding after arbitrary geometry changes and visual 3D judgment were not tested as part of P0-7. Exact nonlinear support reactions and the target C++ condition's internal `diff_phi` are also unverified.
+- Only the listed Windows software stack was validated. Independent beams, volumetric parameterization, solid elements, contact, multiphysics and general trimming-point supports are out of scope.
 
-```powershell
-& '.\.venv\Scripts\python.exe' freecad/Mod/KratosIBRA/backend/check_environment.py
-& '.\.venv\Scripts\python.exe' -m unittest discover -s tests -v
-& '.\.venv\Scripts\python.exe' scripts/run_example.py --output output/verification --solve
-```
-
-For maintainers with the verified FreeCAD distribution, the installed-GUI test can be reproduced using a disposable user directory:
-
-```powershell
-& '.\.venv\Scripts\python.exe' scripts/install_workbench.py --freecad-user-dir 'C:\IBRA-Test\FreeCAD User'
-& 'C:\Path\To\FreeCAD\bin\python.exe' tests/gui_installed_smoke.py 'C:\IBRA-Test\FreeCAD User'
-```
-
-Use your actual paths. This harness creates and closes its own document and exits the test process. Its `gui_result.json` and screenshots are written to the disposable user directory. Production usage should follow the installation guide instead.
-
-These checks validate this example and software path. They do not establish general engineering convergence, the correctness of arbitrary interface choices, or support for other operating systems. The historical wing conversion and two-patch studies described in the user guide are separate development evidence, not part of the 24 portable tests distributed here.
+Historical V0.2 validation is preserved in the [V0.2 tag](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.2).

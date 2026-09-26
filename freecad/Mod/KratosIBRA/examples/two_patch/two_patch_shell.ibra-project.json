@@ -1,0 +1,109 @@
+{
+  "schema_version": 3,
+  "source_step": "two_patch_shell.step",
+  "source_sha256": "066878fbd71546e865566746c2c620a55f12cf7292eadc1c79b97bd655254121",
+  "geometry_sha256": "02d93d6d0b7effdbbf8658368d249a085c27187bb74547158b37bf9b7db85525",
+  "profile": "",
+  "units": "mm-N-s",
+  "materials": [
+    {
+      "id": 1,
+      "name": "Steel",
+      "young": 200000.0,
+      "poisson": 0.0,
+      "density": 7.85e-09
+    }
+  ],
+  "sections": [
+    {
+      "id": 1,
+      "name": "Steel 0.1 mm",
+      "thickness": 0.1
+    }
+  ],
+  "refinement_enabled": true,
+  "patches": [
+    {
+      "face_id": 2,
+      "material_id": 1,
+      "section_id": 1,
+      "element": "Shell3pElement",
+      "active": true,
+      "degree_u": 3,
+      "degree_v": 3,
+      "insert_u": 8,
+      "insert_v": 0,
+      "quadrature": 0
+    },
+    {
+      "face_id": 8,
+      "material_id": 1,
+      "section_id": 1,
+      "element": "Shell3pElement",
+      "active": true,
+      "degree_u": 3,
+      "degree_v": 3,
+      "insert_u": 8,
+      "insert_v": 0,
+      "quadrature": 0
+    }
+  ],
+  "groups": [],
+  "supports": [
+    {
+      "name": "Clamped_left",
+      "target_kind": "edge",
+      "target_id": 6,
+      "side": "u0",
+      "method": "strong",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clamp": true,
+      "interval": [
+        0.0,
+        "End"
+      ]
+    }
+  ],
+  "loads": [
+    {
+      "name": "End_line_force",
+      "target_kind": "edge",
+      "target_id": 10,
+      "variable": "LINE_LOAD",
+      "value": [
+        0.0,
+        0.0,
+        -0.001
+      ],
+      "interval": [
+        0.0,
+        "End"
+      ]
+    }
+  ],
+  "initial_conditions": [],
+  "couplings": [
+    {
+      "edge_id": 14,
+      "state": "confirmed",
+      "origin": "user",
+      "penalty": 100000000.0,
+      "rotation": true
+    }
+  ],
+  "solver": {
+    "type": "static",
+    "analysis_type": "linear",
+    "start_time": 0.0,
+    "end_time": 1.0,
+    "time_step": 1.0
+  },
+  "output": {
+    "vtk": true,
+    "refinement": 4
+  }
+}
