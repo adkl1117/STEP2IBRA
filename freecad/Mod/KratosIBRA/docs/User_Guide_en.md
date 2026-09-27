@@ -1,6 +1,6 @@
 # IBRA Preprocessor for Kratos — User Guide
 
-Version 0.5.0-preview.
+Version 0.5.0.
 
 This native FreeCAD workbench supports preprocessing for **isogeometric B-rep analysis (IBRA)**: import exact CAD geometry, assign constitutive properties and discretization parameters, prescribe boundary and initial conditions, and export structural analysis models for Kratos. The interface uses terminology from computational structural mechanics and the finite element method.
 
@@ -8,7 +8,7 @@ This native FreeCAD workbench supports preprocessing for **isogeometric B-rep an
 
 Start with the [installation guide](Installation_en.md). It covers a separate Python 3.11 environment, dependency verification and installation into the FreeCAD user module directory. This distribution includes the STEP conversion source and does not require a previous project.
 
-After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. To open a V0.5 example, use **Open Project** at the top of the panel and select a project under the installed workbench's `examples` directory. **Open Cantilever Example** remains the historical V0.2 example entry point.
+After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. The Geometry page includes **Open Cantilever Example**, which loads a configured model from the installed workbench.
 
 The dock can be resized, detached and scrolled. Numbered navigation covers Geometry, Materials, Boundary, Initial, Interfaces and Output. Boundary contains Support and Loads tabs. The checkbox after Refinement in Geometry enables refinement and expands its settings; clearing it disables refinement and hides the settings. Validation, export and cancellation remain at the bottom. Backend configuration persists under the FreeCAD user directory in `IBRA/backend.json`; generated data use `IBRA-work` by default. Save path changes using **Save Backend Configuration**.
 
@@ -19,8 +19,11 @@ The dock can be resized, detached and scrolled. Numbered navigation covers Geome
 3. Wait for conversion. The table lists surface patches, one-sided boundaries and candidate interfaces with their B-rep IDs.
 4. Select patches or boundaries in the table or viewport. Hold Ctrl to select multiple independent entities.
 5. Navigate to a condition page, select **Assign Selected Entities**, enter the parameters and select **Add / Update**.
+6. Mouse picking is also available: on Boundary or Initial select **启动物理点选（左键选中键确认）**, left-click a registered patch or edge in the 3D view, and middle-click to confirm and return to the form; then submit with Add / Update. Initial fields and reference pressure accept faces only. Escape (or **取消点选（Esc）**) cancels and restores the view; a page switch, reimport, document close or workbench exit also removes the temporary callbacks and restores visibility. While picking, the middle button is only used to confirm, so normal view navigation keeps working.
 
 Patches are displayed with their original B-rep geometry. Independent boundaries use sampled polylines for selection; exported analysis geometry retains the exact NURBS surfaces and trimming p-curves. Orange curves indicate candidate interfaces. Geometric coincidence alone does not establish the intended structural connection.
+
+The Geometry page **Hover audit** shows the registered Edge / Patch / Coupling ID under the cursor (mode: all, edge, patch or coupling). It only reads state and is removed at every cleanup point listed above. Mouse picking accepts only registered entities of the current project document whose geometry fingerprint is unchanged: objects from another document, preview/result objects, unregistered objects, stale geometry and wrong kinds are refused without mutating any state, and nothing is written to the analysis domain or to input hashes.
 
 Changing a display object's shape or placement invalidates export. Save modified CAD geometry as STEP, reimport it and review the condition assignments.
 
@@ -93,6 +96,10 @@ The Interfaces page identifies adjacent patches and provides activation, penalty
 
 Review detected interfaces against the physical structure. The penalty factor is not a universal material parameter; verify its influence on both solution accuracy and conditioning.
 
+Mouse interface flow: select **启动接口点选流程**, then left-click the first candidate patch, left-click the second candidate patch, and left-click the **existing** candidate interface edge between them; middle-click on that same edge confirms the target. The table highlights the interface row and the right-hand side shows the interface's existing connection type and penalty factor. The connection intent must still be saved explicitly through the existing **Confirm Selected Interface** or **Exclude Selected Interface** — the mouse flow never changes the decision itself. If no existing candidate edge joins the two faces, the flow refuses instead of inventing an interface from adjacency.
+
+**只显示耦合边（coupling-only）** temporarily hides every patch and one-sided boundary and keeps only the interface edges; selecting it again (or cancelling, switching page, reimporting, closing the document or leaving the workbench) restores the previous visibility. This display layer does not change the analysis domain, the coupling decisions or the exported inputs.
+
 ## 8. Validation, export and solution
 
 1. In Analysis and Output, select **Static** or **Implicit Dynamic**, and **Linear** or **Nonlinear**.
@@ -139,10 +146,10 @@ Current P0-3 behaviour: pressing **Ctrl+S** to save the `.FCStd` document associ
 
 ## 11. Example and scope
 
-V0.5 includes three separate schema-3 projects, opened through **Open Project**:
+The cantilever shell has length 10 mm, width 1 mm, thickness 0.1 mm, Young's modulus 200000 N/mm² and Poisson's ratio 0. Its root is clamped and its end line load is −0.001 N/mm. Analytical tip displacement is −0.02 mm; the verified displacement magnitude is approximately 0.0200000000008 mm.
 
-- `examples/v0_5_cantilever/`: a 10 mm × 1 mm single-patch cantilever with 0.1 mm thickness. Its measured maximum displacement is approximately 0.0200000000008 mm against the 0.02 mm analytical value.
-- `examples/two_patch/`: a continuous two-patch shell. Its measured maximum displacement is approximately 0.1600031 mm against a 0.16 mm single-patch reference. The measured interface displacement jump is about 1.0×10⁻¹¹ mm and the normal-angle difference about 1.0×10⁻¹⁰ rad.
-- `examples/perforated_plate/`: a trimmed plate with a true closed hole. The refined case has approximately 32 mm² reference area and a measured assembled pressure resultant of 0.032 N in z. The unrefined variant is rejected by the integration-area guard as expected.
+A two-patch cantilever with displacement and rotational coupling yields approximately 0.0200000031 mm, with relative analytical error approximately 1.56×10⁻⁷. The original two-patch input was solved as a membrane. Wing verification covers conversion and indexing of 22 patches and 81 interfaces only; no wing structural solution has been validated.
 
-This preview does not provide independent beams or cables, volumetric parameterization, solid elements, contact, multiphysics coupling, general trimming-point supports or arbitrary space/time expressions. Pressure acts on the reference configuration; follower pressure is unsupported. Native VTKHDF cannot recover CAD Face/UV identities; signed physical reactions from penalty conditions and full force equilibrium remain unverified. Interactive rebinding after arbitrary geometry edits, exact nonlinear support reactions and the target C++ condition's internal `diff_phi` are also outside this acceptance scope. Each solve uses a new isolated run directory. See [validation evidence](Validation.md) and the [V0.5preview Release](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview).
+This version does not provide independent beams or cables, volumetric parameterization, solid elements, contact, multiphysics coupling, general trimming-point supports or arbitrary space/time expressions. Native Kratos 10.4.3 visualization proves only the sampled picture; verify trimming geometry, integration area and loads independently. Each panel solve uses a new isolated run directory so old visualization steps are not mixed into the new result.
+
+Portable tests are in the repository `tests` directory. The installed `examples/cantilever` directory contains the STEP and relative-path project. See [validation evidence](Validation.md); the historical wing model is not distributed here.

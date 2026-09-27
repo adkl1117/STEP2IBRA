@@ -1,0 +1,57 @@
+name: Publish V0.5 Preview 20260927
+on:
+  push:
+    branches: [release/v0.5preview-20260927]
+permissions:
+  contents: write
+concurrency:
+  group: publish-v05-preview-20260927
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: adkl1117/STEP2IBRA
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Preserve V0.2 and build the selected portable asset
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GH_REPO/git/ref/tags/V0.2 --jq .object.sha)" = 99a790f0301a2d403991d43c059ddd0861127284
+          test "$(gh api repos/$GH_REPO/branches/freecad-ibra-preprocessor --jq .commit.sha)" = 4daa108771b310bf79a6976e7530ec7768711674
+          python3 scripts/build_v05_release.py --output dist
+      - name: Create preview draft and upload five assets
+        run: |
+          set -euo pipefail
+          if gh release view V0.5preview >/dev/null 2>&1; then
+            echo 'V0.5preview release already exists; refusing to overwrite.'
+            exit 1
+          fi
+          if gh api repos/$GH_REPO/git/ref/tags/V0.5preview >/dev/null 2>&1; then
+            echo 'V0.5preview tag already exists; refusing to move it.'
+            exit 1
+          fi
+          gh release create V0.5preview --target "$GITHUB_SHA" --title 'V0.5 Preview — 2026-09-27' --prerelease --draft --latest=false --notes-file docs/V0_5_RELEASE_BODY.md
+          gh release upload V0.5preview dist/STEP2IBRA-V0.5preview-20260927.zip docs/V0_5_INSTALLATION_en.md docs/V0_5_INSTALLATION_zh.md docs/V0_5_RELEASE_NOTES_en.md docs/V0_5_RELEASE_NOTES_zh.md
+      - name: Verify assets and V0.2 before publishing
+        run: |
+          set -euo pipefail
+          gh release view V0.5preview --json assets,isDraft,isPrerelease,tagName > dist/release.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r = json.loads(Path('dist/release.json').read_text())
+          expected = {'STEP2IBRA-V0.5preview-20260927.zip': Path('dist/STEP2IBRA-V0.5preview-20260927.zip')}
+          expected.update({n: Path('docs') / n for n in ['V0_5_INSTALLATION_en.md','V0_5_INSTALLATION_zh.md','V0_5_RELEASE_NOTES_en.md','V0_5_RELEASE_NOTES_zh.md']})
+          assert r['tagName'] == 'V0.5preview' and r['isDraft'] and r['isPrerelease']
+          assert {a['name'] for a in r['assets']} == set(expected)
+          for a in r['assets']:
+              assert a['size'] == expected[a['name']].stat().st_size, a['name']
+          print('Verified five uploaded assets and sizes.')
+          PY
+          test "$(gh api repos/$GH_REPO/git/ref/tags/V0.2 --jq .object.sha)" = 99a790f0301a2d403991d43c059ddd0861127284
+          test "$(gh api repos/$GH_REPO/branches/freecad-ibra-preprocessor --jq .commit.sha)" = 4daa108771b310bf79a6976e7530ec7768711674
+          gh release edit V0.5preview --draft=false --prerelease --latest=false
+          gh release view V0.5preview --json url,isDraft,isPrerelease,assets

@@ -1,5 +1,11 @@
 # Changelog / 更新记录
 
+## V0.5 Preview update — 2026-09-27
+
+Selectable English/Chinese interface, coupling-edge isolation and hover identification, guided left-select/middle-confirm condition/interface editing. Includes bilingual installation and release/usage notes.
+
+可切换中英文界面、耦合边隔离与悬浮编号查看、左键点选和中键确认的条件及接口编辑流程；提供中英文安装指南、版本与使用说明。
+
 ## V0.5preview — 2026-09-26
 
 Preview release based on the unchanged V0.2 tag. It adds staged IBRA pre-processing, safer project/entity binding, pressure and time-table support, native VTKHDF result display, and three editable schema-3 examples. See the [English](docs/V0.5preview_RELEASE_NOTES.md) and [中文](docs/V0.5preview_RELEASE_NOTES_zh.md) release notes for scope and known limits.

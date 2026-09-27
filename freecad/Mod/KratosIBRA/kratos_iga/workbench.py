@@ -17,5 +17,11 @@ class KratosIBRAWorkbench(Gui.Workbench):
         from .gui import show_panel
         show_panel()
 
+    def Deactivated(self):
+        # Native workbench deactivation is the authoritative exit signal: the panel's
+        # temporary mouse callbacks and the coupling-only visibility must not survive it.
+        from .gui import shutdown_interaction
+        shutdown_interaction()
+
     def GetClassName(self):
         return "Gui::PythonWorkbench"

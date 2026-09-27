@@ -2,20 +2,20 @@
 
 A native FreeCAD workbench for **isogeometric B-rep analysis (IBRA)**. Import STEP geometry, assign shell or membrane formulations, materials, refinement, boundary and initial conditions, and export a complete Kratos structural analysis model.
 
-**Branch:** `release/v0.5preview` · **Version:** V0.5preview (`0.5.0-preview`)
+**Branch:** `release/v0.5preview-20260927` · **Version:** V0.5preview (`0.5.0-preview`)
 
 [V0.5preview release / V0.5preview 发布说明](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview) · [Change log](CHANGELOG.md) · [Validation](docs/Validation.md)
 
-[Installation — English](docs/Installation_en.md) · [安装指南 — 中文](docs/Installation_zh.md)
+[Installation — English](docs/V0_5_INSTALLATION_en.md) · [安装指南 — 中文](docs/V0_5_INSTALLATION_zh.md)
 
-[User guide — English](docs/User_Guide_en.md) · [使用说明 — 中文](docs/User_Guide_zh.md)
+[User guide — English](docs/V0_5_RELEASE_NOTES_en.md) · [使用说明 — 中文](docs/V0_5_RELEASE_NOTES_zh.md)
 
 ## Download and configure
 
 Download the **V0.5preview** source archive from Releases and extract it into a stable directory. The V0.2 release remains available under its original tag. Alternatively, clone the preview branch:
 
 ```text
-git clone --branch release/v0.5preview https://github.com/adkl1117/STEP2IBRA.git
+git clone --branch release/v0.5preview-20260927 https://github.com/adkl1117/STEP2IBRA.git
 ```
 
 Follow the installation guide. It covers a separate Python 3.11 environment, dependency installation, an environment check, and copying the workbench into the exact FreeCAD user module directory. FreeCAD, OCCT and Kratos binaries are not included. The STEP conversion source **is bundled**, so no previous project or author-specific folder is required.
@@ -34,7 +34,7 @@ The verified platform is Windows x64 with FreeCAD 1.1.3. Other platforms require
 - Read-only result display from Kratos IGA's native `results.vtkhdf` output.
 - Three schema-3 examples: a single-patch cantilever, a two-patch shell and a perforated trimmed plate.
 - Standalone Kratos export, initialization and solution.
-- English GUI and separate Chinese/English documentation.
+- Selectable English/Chinese GUI, guided mouse picking and bilingual installation/usage documentation.
 
 `geometry.cad.json` contains geometry. A runnable case also includes physics and refinement definitions, materials, solver parameters and Python processes. Official Kratos identifiers such as `IgaApplication` remain unchanged for compatibility.
 

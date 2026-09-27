@@ -258,7 +258,22 @@ class RunResultCliTests(unittest.TestCase):
 # the shared state and the failure-clears-old-result policy
 # --------------------------------------------------------------------------- #
 
-class _Host:
+class _LocalizedHost:
+    """Expose the panel's real language helpers to the result-only fixtures."""
+    tr = gui.Panel.tr
+    _text = gui.Panel._text
+    _label = gui.Panel._label
+    _hint = gui.Panel._hint
+    _button = gui.Panel._button
+    set_message = gui.Panel.set_message
+
+    def __init__(self):
+        self.language = "en"
+        gui.i18n.set_language("en")
+        self._text_registry = gui.i18n_qt.TextRegistry()
+
+
+class _Host(_LocalizedHost):
     """Only the panel methods the result state construction actually needs."""
 
     _fetch_result_payload = gui.Panel._fetch_result_payload
@@ -409,7 +424,7 @@ class _FakeText:
         return self.value
 
 
-class _PanelHost:
+class _PanelHost(_LocalizedHost):
     """Runs the real panel result methods against fakes; no Qt, no FreeCAD."""
 
     _fetch_result_payload = gui.Panel._fetch_result_payload
@@ -433,6 +448,7 @@ class _PanelHost:
     guard = gui.Panel.guard
 
     def __init__(self, run_dir=""):
+        super().__init__()
         self.process = None
         self.project = {}
         self.last_run = None

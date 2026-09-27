@@ -23,6 +23,10 @@ from . import document as doc_owner
 from . import preview as preview_module
 from . import result_layer as result_layer_module
 from . import run_dirs
+from . import interaction
+from . import i18n
+from . import i18n_qt
+from .i18n_qt import display_cell, translate_table_headers, retranslate_table_headers
 
 BASE = Path(__file__).resolve().parents[1]
 from .settings import load_settings, save_settings
@@ -628,6 +632,13 @@ class Panel(W.QDockWidget):
         self.user_data = Path(App.getUserAppDataDir())
         self.settings = load_settings(self.user_data, BASE)
         self.work_dir = Path(self.settings['work_dir'])
+        # V0.5 selectable interface language.  It is read from (and written to) the
+        # plugin's own FreeCAD parameter preference, never from the project, never
+        # from JSON enums and never by changing FreeCAD's global language.
+        self.language = i18n.initialize_language(self.user_data)
+        i18n.set_language(self.language)
+        self._text_registry = i18n_qt.TextRegistry()
+        self._language_applying = False
         self.project = new_project()
         self.index = {"faces": [], "edges": [], "source_sha256": ""}
         self.cache = None
@@ -658,6 +669,9 @@ class Panel(W.QDockWidget):
         self.result_layer = result_layer_module.ResultLayer(None)
         self._build_result_state()
         self.initialized_report = None
+        # V0.5 mouse interaction: created after the status/log widgets exist, so the
+        # coordinator can drive the always-visible Chinese guidance line and the log.
+        self.interaction = None
         self.form = W.QWidget()
         self.form.setObjectName("igaPanel")
         self.setWidget(self.form)
@@ -672,24 +686,44 @@ class Panel(W.QDockWidget):
         brand_text.setSpacing(2)
         header = W.QLabel("IBRA Preprocessor")
         header.setObjectName("title")
+        self._text(header, "brand.heading")
         brand_text.addWidget(header)
         caption = W.QLabel("B-rep-based structural analysis for Kratos")
         caption.setObjectName("brandCaption")
+        self._text(caption, "brand.caption")
         brand_text.addWidget(caption)
         brand_layout.addLayout(brand_text)
         brand_layout.addStretch()
         badge = W.QLabel("KRATOS Multiphysics")
         badge.setObjectName("brandTag")
+        self._text(badge, "brand.badge")
         brand_layout.addWidget(badge)
+        language_box = W.QVBoxLayout()
+        language_box.setSpacing(2)
+        language_caption = W.QLabel()
+        language_caption.setObjectName("brandCaption")
+        language_caption.setAlignment(QtCore.Qt.AlignRight)
+        self._text(language_caption, "top.language")
+        language_box.addWidget(language_caption)
+        self.language_selector = W.QComboBox()
+        self.language_selector.setObjectName("languageSelector")
+        self.language_selector.setMinimumWidth(118)
+        self._text_registry.apply_tooltip(self.language_selector, "top.language_tooltip")
+        language_box.addWidget(self.language_selector)
+        brand_layout.addLayout(language_box)
         layout.addWidget(brand)
+        self._refresh_language_selector()
+        self.language_selector.currentIndexChanged.connect(self._language_changed)
+        # QDockWidget has no setText; its title is the window title.
+        self.setWindowTitle(self.tr("app.title"))
         top = W.QHBoxLayout()
-        import_button = button("+ Import STEP", self.import_step)
+        import_button = self._button("top.import_step", self.import_step)
         import_button.setObjectName("primary")
         top.addWidget(import_button)
-        top.addWidget(button("Open Project", self.open_project))
-        top.addWidget(button("Save Project", self.save_project))
+        top.addWidget(self._button("top.open_project", self.open_project))
+        top.addWidget(self._button("top.save_project", self.save_project))
         layout.addLayout(top)
-        self.summary = text_hint("Import STEP geometry to define shell or membrane models on trimmed surfaces.")
+        self.summary = self._hint("summary.empty")
         self.summary.setObjectName("projectSummary")
         layout.addWidget(self.summary)
         body = W.QHBoxLayout()
@@ -715,10 +749,16 @@ class Panel(W.QDockWidget):
         self.build_preview()
         self.build_output()
         self.navigation.setCurrentRow(0)
-        self.status = W.QLabel("Ready | Import geometry to define the analysis model.")
+        self.status = self._hint("status.ready")
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        # Chinese next-step guidance for the mouse flows. It is never hidden: every
+        # picking step, refusal, cancel and hover audit is reported here.
+        self.interaction_hint = W.QLabel(interaction.GUIDANCE_IDLE)
+        self.interaction_hint.setObjectName("interactionHint")
+        self.interaction_hint.setWordWrap(True)
+        layout.addWidget(self.interaction_hint)
         self.progress = W.QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
@@ -726,29 +766,283 @@ class Panel(W.QDockWidget):
         self.log = W.QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(110)
-        self.log.setPlaceholderText("Geometry conversion, model validation and solver log")
+        self._text_registry.apply_placeholder(self.log, "log.placeholder")
         self.log.setMaximumBlockCount(1500)
         self.log.hide()
-        self.log_toggle = button("Show Log", self.toggle_log)
+        self.log_toggle = self._button("log.show", self.toggle_log)
         self.log_toggle.setObjectName("quiet")
         layout.addWidget(self.log_toggle, 0, QtCore.Qt.AlignRight)
         layout.addWidget(self.log)
         actions = W.QHBoxLayout()
-        actions.addWidget(button("Validate Model", self.check_project))
-        export_button = button("Export Analysis Model  →", self.export_case)
+        actions.addWidget(self._button("action.validate", self.check_project))
+        export_button = self._button("action.export", self.export_case)
         export_button.setObjectName("export")
         actions.addWidget(export_button, 1)
-        self.stop_button = button("Stop", self.cancel)
+        self.stop_button = self._button("action.stop", self.cancel)
         self.stop_button.setObjectName("quiet")
         self.stop_button.setEnabled(False)
         actions.addWidget(self.stop_button)
         layout.addLayout(actions)
         from .theme import stylesheet
         self.form.setStyleSheet(stylesheet())
+        # The mouse session owns real Selection/Coin callbacks; it is created once the
+        # guidance label and log exist and is torn down on page switch/import/close/exit.
+        self.interaction = interaction.InteractionCoordinator(self)
+        self.interaction_hint.setText(interaction.GUIDANCE_IDLE)
+        self.tabs.currentChanged.connect(self._interaction_page_changed)
+        self._interaction_escape = None
+        try:
+            shortcut = getattr(W, "QShortcut", None) or getattr(QtGui, "QShortcut")
+            self._interaction_escape = shortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape),
+                                                self.form)
+            self._interaction_escape.activated.connect(self.cancel_interaction)
+        except Exception as error:  # noqa: BLE001 - reported instead of failing the panel
+            self.interaction_hint.setText(
+                interaction.GUIDANCE_IDLE + "\n" + self.tr("msg.esc_unavailable", error=error))
+        # Workbench exit hook: FreeCAD's main window announces the deactivated workbench,
+        # so the temporary callbacks and visibility are cleared without editing the
+        # workbench module.
+        self._workbench_signal = None
+        try:
+            main = Gui.getMainWindow()
+            if main is not None and hasattr(main, "workbenchDeactivated"):
+                main.workbenchDeactivated.connect(self._workbench_deactivated)
+                self._workbench_signal = main
+        except Exception as error:  # noqa: BLE001 - reported, never fatal
+            self.log.appendPlainText(self.tr("msg.workbench_hook_unavailable", error=error))
+
+    def _workbench_deactivated(self, name):
+        if name == "KratosIBRAWorkbench" and self.interaction is not None:
+            self.interaction.shutdown()
+
+    # ------------------------------------------------------------------ language
+    # V0.5 selectable language.  Only *text* is registered with its source; widget
+    # values, itemData, the project, drafts, the native selection and the active
+    # picking stage are never touched, so a live switch cannot lose any state.
+    def tr(self, key, **params):
+        """Translate a catalog key into the current panel language."""
+        return i18n.translate(key, self.language, **params)
+
+    def _text(self, widget, key, tooltip=None, **params):
+        self._text_registry.apply_text(widget, key, **params)
+        if tooltip:
+            self._text_registry.apply_tooltip(widget, tooltip)
+        return widget
+
+    def set_message(self, widget, key, **params):
+        """Show a message on a label and keep its source for a live retranslation.
+
+        ``params`` are data (a name, ID, value or path): they are substituted, never
+        translated, so a language switch re-renders the template only.
+        """
+        return self._text(widget, key, **params)
+
+    def _label(self, key=None, **params):
+        label = W.QLabel()
+        if key is not None:
+            self._text(label, key, **params)
+        return label
+
+    def _hint(self, key, **params):
+        label = text_hint("")
+        self._text(label, key, **params)
+        return label
+
+    def _button(self, key, callback, **params):
+        widget = W.QPushButton("")
+        widget.clicked.connect(callback)
+        self._text(widget, key, **params)
+        return widget
+
+    def _checkbox(self, key, **params):
+        widget = W.QCheckBox()
+        self._text(widget, key, **params)
+        return widget
+
+    def _form_label(self, form, text, key, **params):
+        """Add a QFormLayout row whose generated label follows the language."""
+        label = W.QLabel()
+        form.addRow(label, text)
+        self._text(label, key, **params)
+        return label
+
+    #: Coupling table enum token -> catalog key (the token is the stored data).
+    COUPLING_STATE_KEYS = {"confirmed": "state.confirmed", "excluded": "state.excluded",
+                           "pending": "state.pending"}
+    COUPLING_ORIGIN_KEYS = {"user": "origin.user", "geometry": "origin.geometry"}
+
+    def _register_coupling_cell(self, row, column, token, kind):
+        """Display a translated coupling enum while keeping its canonical token.
+
+        The JSON still reads the token (never the displayed text); the cell is
+        registered so a language switch re-renders only the visible label.
+        """
+        table = self.coupling_table
+        item = table.item(row, column)
+        if item is None:
+            return
+        token = str(token)
+        item.setData(i18n_qt.CANONICAL_ROLE, token)
+        mapping = (self.COUPLING_STATE_KEYS if kind == "state" else self.COUPLING_ORIGIN_KEYS)
+        key = mapping.get(token)
+        if key:
+            i18n_qt.display_cell(item, key)
+            self._text_registry.register_cell(item, key)
+        else:
+            item.setText(token)
+
+    @staticmethod
+    def _canonical_cell(table, row, column):
+        """Read a table cell's canonical value, never its translated display text."""
+        return i18n_qt.canonical_item_value(table.item(row, column))
+
+    def _table(self, headers):
+        table = self.table(["" for _ in headers])
+        translate_table_headers(self._text_registry, table, headers, self.language)
+        return table
+
+    def _combo_items(self, combo, entries, current=None):
+        """Populate a combo with ``[(key, canonical)]``; data stays canonical."""
+        for key, canonical in entries:
+            combo.addItem("", canonical)
+            index = combo.count() - 1
+            self._text_registry.register_item(combo, index, key)
+        if current is not None:
+            combo.setCurrentIndex(max(0, combo.findData(current)))
+        return combo
+
+    def retranslate(self):
+        """Re-render every registered interface string in ``self.language``.
+
+        Runs in place: no widget is rebuilt, no table is repopulated, no project or
+        selection state is read back and no geometry is touched.
+        """
+        if self._language_applying:
+            return 0
+        self._language_applying = True
+        blocked = self._block_combo_signals()
+        try:
+            changed = self._text_registry.retranslate(self.language)
+            for table in self._translated_tables():
+                changed += retranslate_table_headers(self._text_registry, table, self.language)
+            self._retranslate_dynamic()
+            return changed
+        finally:
+            self._unblock_combo_signals(blocked)
+            self._language_applying = False
+
+    def _block_combo_signals(self):
+        """No combo signal may fire while only its display text is re-rendered.
+
+        A language switch must never run a load-kind / element / unit callback and
+        therefore can never mutate the project or reload a condition editor.
+        """
+        blocked = []
+        try:
+            combos = self.form.findChildren(W.QComboBox)
+        except Exception:  # noqa: BLE001 - a partially built panel has no combos yet
+            return blocked
+        for combo in combos:
+            try:
+                previous = combo.blockSignals(True)
+            except Exception:  # noqa: BLE001
+                continue
+            blocked.append((combo, previous))
+        return blocked
+
+    def _unblock_combo_signals(self, blocked):
+        for combo, previous in blocked:
+            try:
+                combo.blockSignals(previous)
+            except Exception:  # noqa: BLE001 - a deleted C++ object is already gone
+                pass
+
+    def _translated_tables(self):
+        seen = []
+        for name in ("geometry_table", "material_table", "section_table",
+                     "assignment_table", "patch_table", "group_table", "rebind_table",
+                     "snapshot_table", "load_amplitude_table", "coupling_table",
+                     "preview_refinement_table", "run_report_view"):
+            table = getattr(self, name, None)
+            if table is not None and hasattr(table, "horizontalHeaderItem"):
+                seen.append(table)
+        return seen
+
+    def _retranslate_dynamic(self):
+        """Re-render the few texts that depend on live state (no state is read)."""
+        row = self.navigation.currentRow() if hasattr(self, "navigation") else -1
+        if row >= 0:
+            self._refresh_navigation_labels()
+        # The mouse guidance keeps its own source, so a switch keeps the exact step.
+        if self.interaction is not None:
+            self.interaction.set_language(self.language)
+        self._interaction_sync_toggles()
+        self._update_unit_status()
+        self._refresh_result_evidence()
+        self._render_result_views()
+        self.setWindowTitle(self.tr("app.title"))
+        log_button = getattr(self, "log_toggle", None)
+        if log_button is not None:
+            self._text(log_button, "log.hide" if self.log.isVisible() else "log.show")
+
+    def set_language(self, language, persist=True):
+        """Switch the interface language live, keeping every draft and stage.
+
+        Persists only the plugin's own language preference.  FreeCAD's global
+        language, the project and the analysis data are never modified.
+        """
+        code = i18n.normalize_language(language, default=self.language)
+        combo = getattr(self, "language_selector", None)
+        if combo is not None:
+            previous = combo.blockSignals(True)
+            try:
+                combo.setCurrentIndex(combo.findData(code))
+            finally:
+                combo.blockSignals(previous)
+        if code == self.language:
+            return code
+        self.language = code
+        i18n.set_language(code)
+        if persist:
+            i18n.write_language_preference(code, self.user_data)
+        self.retranslate()
+        return code
+
+    def _language_changed(self, index):
+        combo = getattr(self, "language_selector", None)
+        if combo is None or self._language_applying:
+            return
+        code = combo.itemData(index)
+        if code:
+            self.set_language(code)
+
+    def _refresh_language_selector(self):
+        combo = getattr(self, "language_selector", None)
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for code in i18n.LANGUAGES:
+                combo.addItem(i18n.language_label(code), code)
+            index = combo.findData(self.language)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            combo.blockSignals(False)
 
     def toggle_log(self):
         self.log.setVisible(not self.log.isVisible())
-        self.log_toggle.setText("Hide Log" if self.log.isVisible() else "Show Log")
+        self._text(self.log_toggle, "log.hide" if self.log.isVisible() else "log.show")
+
+    #: Page title -> (eyebrow key, heading key, navigation key)
+    PAGE_KEYS = {"Geometry": ("page.geometry.eyebrow", "page.geometry.title", "nav.geometry"),
+                 "Materials": ("page.materials.eyebrow", "page.materials.title", "nav.materials"),
+                 "Groups": ("page.groups.eyebrow", "page.groups.title", "nav.groups"),
+                 "Boundary": ("page.boundary.eyebrow", "page.boundary.title", "nav.boundary"),
+                 "Initial": ("page.initial.eyebrow", "page.initial.title", "nav.initial"),
+                 "Interfaces": ("page.interfaces.eyebrow", "page.interfaces.title", "nav.interfaces"),
+                 "Preview": ("page.preview.eyebrow", "page.preview.title", "nav.preview"),
+                 "Analysis": ("page.analysis.eyebrow", "page.analysis.title", "nav.analysis")}
 
     def page(self, title):
         page = W.QWidget()
@@ -756,27 +1050,34 @@ class Panel(W.QDockWidget):
         layout = W.QVBoxLayout(page)
         layout.setContentsMargins(16, 15, 16, 15)
         layout.setSpacing(10)
-        titles = {"Geometry": ("GEOMETRY", "Geometry and Topology", "Geometry"),
-                  "Materials": ("MATERIALS", "Constitutive Properties", "Materials"),
-                  "Groups": ("GROUPS", "Named Groups and Rebinding", "Groups"),
-                  "Boundary": ("BOUNDARY", "Boundary Conditions", "Boundary"),
-                  "Initial": ("INITIAL STATE", "Initial Conditions", "Initial"),
-                  "Interfaces": ("INTERFACES", "Patch Interfaces", "Interfaces"),
-                  "Preview": ("PREVIEW", "Inspectable Preprocessing", "Preview"),
-                  "Analysis": ("ANALYSIS", "Analysis and Output", "Output")}
+        eyebrow_key, heading_key, nav_key = self.PAGE_KEYS[title]
         number = self.tabs.count()
-        eyebrow = W.QLabel(titles[title][0])
+        eyebrow = W.QLabel()
         eyebrow.setObjectName("eyebrow")
-        heading = W.QLabel(titles[title][1])
+        self._text(eyebrow, eyebrow_key)
+        heading = W.QLabel()
         heading.setObjectName("sectionTitle")
+        self._text(heading, heading_key)
         layout.addWidget(eyebrow)
         layout.addWidget(heading)
         scroll = W.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         self.tabs.addTab(scroll, title)
-        self.navigation.addItem(f"{number+1:02}  {titles[title][2]}")
+        self.navigation.addItem("")
+        # QListWidget has no setItemData/itemData: store the page key on the item.
+        self.navigation.item(self.navigation.count() - 1).setData(i18n_qt.SOURCE_ROLE, nav_key)
+        self._refresh_navigation_labels()
         return layout
+
+    def _refresh_navigation_labels(self):
+        """Re-render the 01..08 navigation rows; the page identity never changes."""
+        for row in range(self.navigation.count()):
+            item = self.navigation.item(row)
+            key = item.data(i18n_qt.SOURCE_ROLE) if item is not None else None
+            if not isinstance(key, str):
+                continue
+            item.setText(f"{row + 1:02}  {self.tr(key)}")
 
     def table(self, headers):
         table = W.QTableWidget(0, len(headers))
@@ -792,26 +1093,28 @@ class Panel(W.QDockWidget):
     def build_geometry(self):
         layout = self.page("Geometry")
         layout.setAlignment(QtCore.Qt.AlignTop)
-        self.geometry_table = self.table(["Type", "BRep ID", "Patch IDs / Degrees"])
+        self.geometry_table = self._table(["geometry.table.type", "geometry.table.brep_id",
+                                           "geometry.table.patch"])
         self.geometry_table.setMaximumHeight(240)
         self.geometry_table.setEditTriggers(W.QAbstractItemView.NoEditTriggers)
         self.geometry_table.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         self.geometry_table.itemSelectionChanged.connect(self.select_table_geometry)
         layout.addWidget(self.geometry_table)
-        layout.addWidget(text_hint("Select patches or edges in the table or viewport; hold Ctrl for multiple entities. Orange curves indicate candidate interfaces. Display polylines do not replace the NURBS analysis geometry."))
-        layout.addWidget(button("Open Cantilever Example", lambda: self.guard(lambda: self.load_project(BASE/"examples/cantilever/cantilever.ibra-project.json"))))
-        self.selection_text = text_hint("No target entity selected")
+        layout.addWidget(self._hint("geometry.table_hint"))
+        layout.addWidget(self._button("geometry.open_example", lambda: self.guard(
+            lambda: self.load_project(BASE/"examples/cantilever/cantilever.ibra-project.json"))))
+        self.selection_text = self._hint("geometry.no_target")
         layout.addWidget(self.selection_text)
         self.profile = W.QLineEdit()
-        self.profile.setPlaceholderText("Optional model-specific conversion profile (JSON)")
+        self._text_registry.apply_placeholder(self.profile, "geometry.profile_placeholder")
         layout.addWidget(self.profile)
-        layout.addWidget(button("Select Conversion Profile", self.choose_profile))
-        layout.addWidget(text_hint("Reimport after changing the profile. Face exclusion and duplicate-face handling follow the configured conversion pipeline."))
+        layout.addWidget(self._button("geometry.select_profile", self.choose_profile))
+        layout.addWidget(self._hint("geometry.profile_hint"))
         refinement_header = W.QHBoxLayout()
-        refinement_header.addWidget(W.QLabel("Refinement"))
+        refinement_header.addWidget(self._label("geometry.refinement"))
         self.refinement_toggle = W.QCheckBox()
-        self.refinement_toggle.setAccessibleName("Enable Refinement")
-        self.refinement_toggle.setToolTip("Enable degree elevation and knot insertion. Unchecked uses the original geometry without refinement.")
+        self._text_registry.apply_tooltip(self.refinement_toggle, "geometry.refinement_tooltip")
+        self.refinement_toggle.setAccessibleName(self.tr("geometry.refinement_enable"))
         self.refinement_toggle.toggled.connect(self.toggle_refinement)
         refinement_header.addWidget(self.refinement_toggle)
         refinement_header.addStretch()
@@ -822,6 +1125,22 @@ class Panel(W.QDockWidget):
         self.build_patches(refinement_layout)
         layout.addWidget(self.refinement_content)
         self.refinement_content.hide()
+        hover_row = W.QHBoxLayout()
+        hover_row.addWidget(self._label("geometry.hover_audit"))
+        self.hover_mode = W.QComboBox()
+        self._combo_items(self.hover_mode, [
+            ("geometry.hover_mode_all", "all"),
+            ("geometry.hover_mode_edge", "edge"),
+            ("geometry.hover_mode_patch", "patch"),
+            ("geometry.hover_mode_coupling", "coupling")], current="all")
+        self.hover_mode.currentIndexChanged.connect(self._hover_mode_changed)
+        hover_row.addWidget(self.hover_mode, 1)
+        self.hover_audit = self._checkbox("geometry.hover_audit_enable")
+        self._text_registry.apply_tooltip(self.hover_audit, "geometry.hover_audit_tooltip")
+        self.hover_audit.toggled.connect(self._hover_audit_toggled)
+        hover_row.addWidget(self.hover_audit)
+        layout.addLayout(hover_row)
+        layout.addWidget(self._hint("geometry.hover_hint"))
         layout.addStretch(1)
 
     def toggle_refinement(self, expanded):
@@ -830,76 +1149,96 @@ class Panel(W.QDockWidget):
 
     def build_materials(self):
         layout = self.page("Materials")
-        layout.addWidget(text_hint("Constitutive law: isotropic linear elasticity under plane stress. Materials hold E, ν and ρ. Sections hold thickness and may be shared by several patches."))
-        self.material_table = self.table(["ID", "Name", "E", "ν", "ρ"])
+        layout.addWidget(self._hint("materials.hint"))
+        self.material_table = self._table(["materials.table.id", "materials.table.name",
+                                           "materials.table.e", "materials.table.nu",
+                                           "materials.table.rho"])
         layout.addWidget(self.material_table)
         row = W.QHBoxLayout()
-        row.addWidget(button("Add Material", self.add_material))
-        row.addWidget(button("Remove Selected Rows", lambda: self.delete_row(self.material_table)))
+        row.addWidget(self._button("materials.add", self.add_material))
+        row.addWidget(self._button("materials.remove_rows",
+                                   lambda: self.delete_row(self.material_table)))
         layout.addLayout(row)
-        layout.addWidget(W.QLabel("Sections"))
-        self.section_table = self.table(["ID", "Name", "Thickness"])
+        layout.addWidget(self._label("materials.sections"))
+        self.section_table = self._table(["materials.table.id", "materials.table.name",
+                                          "materials.table.thickness"])
         layout.addWidget(self.section_table)
         row = W.QHBoxLayout()
-        row.addWidget(button("Add Section", self.add_section))
-        row.addWidget(button("Remove Selected Rows", lambda: self.delete_row(self.section_table)))
+        row.addWidget(self._button("materials.add_section", self.add_section))
+        row.addWidget(self._button("materials.remove_rows",
+                                   lambda: self.delete_row(self.section_table)))
         layout.addLayout(row)
-        self.current_units = W.QLabel()
+        self.current_units = self._hint("materials.current_units", units=self.project.get("units", ""))
         self.current_units.setObjectName("hint")
         layout.addWidget(self.current_units)
         self.units = W.QComboBox()
-        self.units.addItems(list(UNIT_SYSTEMS))
+        for system in UNIT_SYSTEMS:
+            self.units.addItem(system, system)
         self.units.currentIndexChanged.connect(lambda _index: self._update_unit_status())
         layout.addWidget(self.units)
-        layout.addWidget(button("Convert Values to Selected Unit System", lambda: self.guard(self.convert_units)))
-        layout.addWidget(text_hint("OCCT imports STEP coordinates in mm. The m-N-s system scales exported geometry by 0.001. Density in mm-N-s is expressed in tonne/mm³. Changing the unit system converts every physical value; it never rescales silently. Validate, save and export require the displayed target to be applied first."))
-        layout.addWidget(W.QLabel("Patch Assignments"))
-        self.assignment_table = self.table(["Face", "Material ID", "Section ID", "Element", "GP", "Active"])
+        layout.addWidget(self._button("materials.convert", lambda: self.guard(self.convert_units)))
+        layout.addWidget(self._hint("materials.units_hint"))
+        layout.addWidget(self._label("materials.patch_assignments"))
+        self.assignment_table = self._table(["materials.patch.face", "materials.patch.material",
+                                             "materials.patch.section", "materials.patch.element",
+                                             "materials.patch.gp", "materials.patch.active"])
         layout.addWidget(self.assignment_table)
-        layout.addWidget(text_hint("These assignments remain active when Refinement is disabled. GP = 0 uses default quadrature."))
+        layout.addWidget(self._hint("geometry.assignment_hint"))
 
     def build_patches(self, layout):
-        layout.addWidget(text_hint("Degrees p/q are target polynomial degrees. h-u/h-v specify knot insertions per existing span. GP = 0 retains the default quadrature rule."))
-        self.patch_table = self.table(["Face", "Material ID", "Element", "p", "q", "h-u", "h-v", "GP"])
+        layout.addWidget(self._hint("geometry.refinement_hint"))
+        self.patch_table = self._table(["materials.patch.face", "materials.patch.material",
+                                        "materials.patch.element", "materials.patch.degree_p",
+                                        "materials.patch.degree_q", "materials.patch.hu",
+                                        "materials.patch.hv", "materials.patch.gp"])
         for column in (1, 2, 7):
             self.patch_table.setColumnHidden(column, True)
         layout.addWidget(self.patch_table)
         self.bulk_material = spin(1,1,9999)
         self.bulk_element = element_selector()
+        self._combo_items(self.bulk_element, [("element.shell", "Shell3pElement"),
+                                              ("element.membrane", "IgaMembraneElement")],
+                          current="Shell3pElement")
         self.bulk_degree = spin(2,1,8)
         self.bulk_h = spin(1,0,100)
         batch = W.QFormLayout()
-        batch.addRow("Material ID",self.bulk_material)
-        batch.addRow("Element Formulation",self.bulk_element)
+        self._form_label(batch, self.bulk_material, "materials.bulk.material")
+        self._form_label(batch, self.bulk_element, "materials.bulk.element")
         dimensions = W.QWidget()
         row = W.QHBoxLayout(dimensions)
         row.setContentsMargins(0,0,0,0)
-        row.addWidget(W.QLabel("Minimum Degree"))
+        row.addWidget(self._label("materials.bulk.min_degree"))
         row.addWidget(self.bulk_degree)
-        row.addWidget(W.QLabel("Knots per Span"))
+        row.addWidget(self._label("materials.bulk.knots"))
         row.addWidget(self.bulk_h)
         batch.addRow(dimensions)
         layout.addLayout(batch)
         row = W.QHBoxLayout()
-        row.addWidget(button("Select All",self.patch_table.selectAll))
-        row.addWidget(button("Apply to Selected Patches",self.bulk_patch_settings),1)
+        row.addWidget(self._button("materials.bulk.select_all", self.patch_table.selectAll))
+        row.addWidget(self._button("materials.bulk.apply", self.bulk_patch_settings),1)
         layout.addLayout(row)
-        layout.addWidget(text_hint("The shell formulation requires degree ≥ 2 and internal C¹ continuity. Degree elevation preserves existing C⁰ continuity. Membranes require degree ≥ 1. Beam and volumetric formulations are outside the current scope."))
+        layout.addWidget(self._hint("materials.formulation_hint"))
 
     def condition_common(self, category, title, layout=None):
         if layout is None:
             layout = self.page(title)
         target = W.QLineEdit()
         target.setReadOnly(True)
-        target.setPlaceholderText("Select geometric entities, then assign the selection.")
+        self._text_registry.apply_placeholder(target, "conditions.target_placeholder")
         layout.addWidget(target)
-        layout.addWidget(button("Assign Selected Entities", lambda: self.capture(category)))
+        layout.addWidget(self._button("conditions.assign", lambda: self.capture(category)))
+        pick_row = W.QHBoxLayout()
+        pick_row.addWidget(self._button("conditions.start_pick",
+                                        lambda: self.start_boundary_pick(category)))
+        pick_row.addWidget(self._button("conditions.cancel_pick", self.cancel_interaction))
+        layout.addLayout(pick_row)
+        layout.addWidget(self._hint("conditions.pick_start_hint"))
         name = W.QLineEdit(title+"_1")
         form = W.QFormLayout()
-        form.addRow("Name", name)
+        self._form_label(form, name, "conditions.name")
         group = W.QComboBox()
-        group.addItem("(direct selection)", None)
-        form.addRow("Named Group", group)
+        self._combo_items(group, [("groups.direct_selection", None)], current=None)
+        self._form_label(form, group, "conditions.named_group")
         layout.addLayout(form)
         setattr(self, category+"_target", target)
         setattr(self, category+"_name", name)
@@ -909,41 +1248,48 @@ class Panel(W.QDockWidget):
 
     def build_groups(self):
         layout = self.page("Groups")
-        layout.addWidget(text_hint("Named groups hold explicit face or edge B-rep IDs. A condition either points at one group or at direct targets, never both. Missing members are shown as missing and block export - they are never silently removed."))
-        self.group_table = self.table(["ID", "Name", "Kind", "Members", "Status"])
+        layout.addWidget(self._hint("groups.hint"))
+        self.group_table = self._table(["groups.table.id", "groups.table.name",
+                                        "groups.table.kind", "groups.table.members",
+                                        "groups.table.status"])
         layout.addWidget(self.group_table)
         row = W.QHBoxLayout()
-        row.addWidget(button("Create Group from Selection", self.create_group_from_selection))
-        row.addWidget(button("Rename Group", self.rename_group))
-        row.addWidget(button("Remove Group", self.remove_group))
+        row.addWidget(self._button("groups.create", self.create_group_from_selection))
+        row.addWidget(self._button("groups.rename", self.rename_group))
+        row.addWidget(self._button("groups.remove", self.remove_group))
         row.addStretch(1)
         layout.addLayout(row)
-        layout.addWidget(text_hint("Groups accept one-sided faces or boundary edges only. Interfaces, preview polylines and mixed selections are rejected explicitly."))
-        layout.addWidget(W.QLabel("Pending rebind"))
-        self.rebind_table = self.table(["Entry", "Kind", "Old target", "Reason", "Action"])
+        layout.addWidget(self._hint("groups.accept_hint"))
+        layout.addWidget(self._label("groups.pending_rebind"))
+        self.rebind_table = self._table(["groups.rebind_table.entry", "groups.rebind_table.kind",
+                                         "groups.rebind_table.old", "groups.rebind_table.reason",
+                                         "groups.rebind_table.action"])
         layout.addWidget(self.rebind_table)
         rebind_row = W.QHBoxLayout()
-        rebind_row.addWidget(button("Rebind to Current Selection", self.rebind_selected))
-        rebind_row.addWidget(button("Drop Binding", self.drop_rebind_selected))
+        rebind_row.addWidget(self._button("groups.rebind_selected", self.rebind_selected))
+        rebind_row.addWidget(self._button("groups.drop_binding", self.drop_rebind_selected))
         rebind_row.addStretch(1)
         layout.addLayout(rebind_row)
-        layout.addWidget(text_hint("After a geometry change every relevant binding is marked pending. Nothing is inherited from a coincidentally equal ID: rebind explicitly or drop it. Export stays blocked while this list is not empty."))
+        layout.addWidget(self._hint("groups.rebind_hint"))
 
-        layout.addWidget(W.QLabel("Controlled snapshot and explicit remap"))
-        self.snapshot_table = self.table(["Old target", "Kind", "Referenced by", "New target", "Status"])
+        layout.addWidget(self._label("groups.snapshot_heading"))
+        self.snapshot_table = self._table(["groups.snapshot_table.old", "groups.snapshot_table.kind",
+                                           "groups.snapshot_table.referenced",
+                                           "groups.snapshot_table.new",
+                                           "groups.snapshot_table.status"])
         layout.addWidget(self.snapshot_table)
         snapshot_row = W.QHBoxLayout()
-        snapshot_row.addWidget(button("Capture Controlled Snapshot", self.capture_controlled_snapshot))
-        snapshot_row.addWidget(button("Convert Snapshot (preview)", self.run_snapshot_conversion))
-        snapshot_row.addWidget(button("Apply Explicit Mapping", self.apply_snapshot_mapping))
-        snapshot_row.addWidget(button("Cancel Snapshot", self.cancel_snapshot))
-        snapshot_row.addWidget(button("Recover for Snapshot", self.recover_document_for_snapshot))
+        snapshot_row.addWidget(self._button("groups.snapshot.capture", self.capture_controlled_snapshot))
+        snapshot_row.addWidget(self._button("groups.snapshot.convert", self.run_snapshot_conversion))
+        snapshot_row.addWidget(self._button("groups.snapshot.apply", self.apply_snapshot_mapping))
+        snapshot_row.addWidget(self._button("groups.snapshot.cancel", self.cancel_snapshot))
+        snapshot_row.addWidget(self._button("groups.snapshot.recover", self.recover_document_for_snapshot))
         snapshot_row.addStretch(1)
         layout.addLayout(snapshot_row)
-        self.snapshot_status = W.QLabel("No snapshot in progress.")
+        self.snapshot_status = self._hint("groups.snapshot.none")
         self.snapshot_status.setWordWrap(True)
         layout.addWidget(self.snapshot_status)
-        layout.addWidget(text_hint("The snapshot writes a new STEP under the work area and converts it with the existing worker. Every required old face/edge stays UNRESOLVED - even at an equal ID - until you choose a new same-kind target or explicitly drop it. Nothing is created, bound or overwritten until a complete mapping is applied; cancelling leaves the original document, source, cache and choices unchanged."))
+        layout.addWidget(self._hint("groups.snapshot_hint"))
 
     # ------------------------------------------------------------------ controlled snapshot
     def _snapshot_step_path(self):
@@ -980,9 +1326,8 @@ class Panel(W.QDockWidget):
                              "old_project": deepcopy(self.project), "old_index": deepcopy(self.index),
                              "old_cache": str(self.cache) if self.cache else "",
                              "new_index": None, "new_cache": None, "plan": None}
-            self.snapshot_status.setText(
-                f"Snapshot captured: {meta['face_total']} face(s) written to {destination.name}. "
-                "Convert it, then resolve every mapping below.")
+            self.set_message(self.snapshot_status, "msg.snapshot_captured",
+                             faces=meta['face_total'], name=destination.name)
             self.refresh_snapshot_table()
         self.guard(operation)
 
@@ -1008,7 +1353,7 @@ class Panel(W.QDockWidget):
                 self.snapshot["plan"] = None
                 self.refresh_snapshot_table()
             self.snapshot["new_cache"] = str(cache)
-            self.snapshot_status.setText("Converting the snapshot with the existing worker...")
+            self.set_message(self.snapshot_status, "msg.snapshot_converting")
             self.start_worker({"action": "convert", "source_step": self.snapshot["step"],
                                "profile": self.profile.text().strip(), "cache_dir": str(cache)},
                               self.snapshot_converted)
@@ -1025,10 +1370,10 @@ class Panel(W.QDockWidget):
             self.snapshot["plan"] = stage_rebind(self.snapshot["old_project"], self.snapshot["old_index"])
             preview = self._build_snapshot_preview(cache, new_index)
             self.refresh_snapshot_table()
-            self.snapshot_status.setText(
-                f"Converted: {len(new_index['faces'])} new face(s). Preview document '{preview}' shows every "
-                f"new face/edge with its kind and ID; {len(self.snapshot['plan']['required_keys'])} old "
-                "target(s) must be mapped or dropped. Nothing has been changed yet.")
+            self.set_message(
+                self.snapshot_status, "msg.snapshot_converted",
+                faces=len(new_index['faces']), preview=preview,
+                required=len(self.snapshot['plan']['required_keys']))
         self.guard(operation)
 
     def _build_snapshot_preview(self, cache, new_index):
@@ -1153,14 +1498,14 @@ class Panel(W.QDockWidget):
                                   self.snapshot["new_index"], mapping,
                                   drop_targets=drop or None, source_step=self.snapshot["step"])
             if not self._confirm_snapshot_summary(result["summary"]):
-                self.snapshot_status.setText("Mapping cancelled; nothing was changed.")
+                self.set_message(self.snapshot_status, "msg.snapshot_mapping_cancelled")
                 return
             self._bind_snapshot(result["project"], result["summary"])
             summary = result["summary"]
-            self.snapshot_status.setText(
-                f"Mapping applied. {len(summary.get('unmapped_new_faces', []))} new face(s) received default "
-                f"patch settings; {len(summary.get('regenerated_couplings', []))} interface(s) regenerated as "
-                "pending; the previous document remains open and unchanged.")
+            self.set_message(
+                self.snapshot_status, "msg.snapshot_applied",
+                defaults=len(summary.get('unmapped_new_faces', [])),
+                couplings=len(summary.get('regenerated_couplings', [])))
         self.guard(operation)
 
     def _confirm_snapshot_summary(self, summary):
@@ -1183,10 +1528,12 @@ class Panel(W.QDockWidget):
         if not lines:
             return True
         box = W.QMessageBox(self)
-        box.setWindowTitle("Confirm snapshot remap")
-        box.setText("Review the named consequences of this mapping before committing.")
+        box.setWindowTitle(self.tr("groups.snapshot.confirm_title"))
+        box.setText(self.tr("groups.snapshot.confirm_text"))
         box.setDetailedText("\n".join(lines))
         box.setStandardButtons(W.QMessageBox.Ok | W.QMessageBox.Cancel)
+        box.button(W.QMessageBox.Ok).setText(self.tr("action.confirm"))
+        box.button(W.QMessageBox.Cancel).setText(self.tr("action.cancel"))
         execute = getattr(box, "exec", None) or getattr(box, "exec_")
         return execute() == W.QMessageBox.Ok
 
@@ -1230,7 +1577,7 @@ class Panel(W.QDockWidget):
         self._close_snapshot_preview()
         self.snapshot = None
         self.refresh_snapshot_table()
-        self.status.setText("Controlled snapshot applied; the previous document remains open and unchanged.")
+        self.set_message(self.status, "msg.snapshot_applied_short")
 
     def cancel_snapshot(self):
         if self.snapshot and self.process:
@@ -1241,8 +1588,8 @@ class Panel(W.QDockWidget):
         if old_doc and old_doc in App.listDocuments():
             App.setActiveDocument(old_doc)
         if hasattr(self, "snapshot_status"):
-            self.snapshot_status.setText(
-                "Snapshot cancelled; the original document, source, cache and every choice are unchanged.")
+            self.set_message(
+                self.snapshot_status, "msg.snapshot_cancelled")
         self.refresh_snapshot_table()
 
     def recover_document_for_snapshot(self):
@@ -1281,8 +1628,7 @@ class Panel(W.QDockWidget):
             self._reset_panel_context(doc, cache, index, state.project, state.entity_map)
             self.refresh()
             self.attach_to_document()
-            self.status.setText("Recovered the stored project in a pending state (SyncError kept). "
-                                "Capture a controlled snapshot to remap explicitly.")
+            self.set_message(self.status, "msg.snapshot_recovered")
         self.guard(operation)
 
     def refresh_groups(self):
@@ -1315,7 +1661,7 @@ class Panel(W.QDockWidget):
                 {"id": max(ids, default=0) + 1, "name": f"Group {max(ids, default=0) + 1}",
                  "kind": kind, "members": members, "origin": "user"})
             self.refresh_group_views()
-            self.status.setText(f"Group created from selection: {kind} {members}")
+            self.set_message(self.status, "msg.group_created", kind=kind, members=members)
         self.guard(operation)
 
     def _selected_group(self):
@@ -1330,7 +1676,8 @@ class Panel(W.QDockWidget):
             group = self._selected_group()
             if group is None:
                 raise ValueError("Select a group row first.")
-            text, ok = W.QInputDialog.getText(self, "Rename Group", "Name", text=str(group.get("name", "")))
+            text, ok = W.QInputDialog.getText(self, self.tr("dialog.rename_group"),
+                                          self.tr("dialog.name"), text=str(group.get("name", "")))
             if not ok or not text.strip():
                 return
             group["name"] = text.strip()
@@ -1411,56 +1758,63 @@ class Panel(W.QDockWidget):
         box = W.QWidget()
         row = W.QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
-        a, b = W.QLineEdit("0.0"), W.QLineEdit("End")
+        a, b = W.QLineEdit("0.0"), W.QLineEdit(self.tr("conditions.end"))
         row.addWidget(a)
         row.addWidget(W.QLabel("→"))
         row.addWidget(b)
-        form.addRow("Active Time Interval", box)
+        self._form_label(form, box, "conditions.interval")
         setattr(self, category+"_interval", (a, b))
 
     def condition_list(self, layout, category):
         row = W.QHBoxLayout()
-        row.addWidget(button("Add / Update", lambda: self.add_condition(category)))
-        row.addWidget(button("Remove", lambda: self.delete_condition(category)))
-        row.addWidget(button("New", lambda: self.new_condition(category)))
+        row.addWidget(self._button("action.add_update", lambda: self.add_condition(category)))
+        row.addWidget(self._button("action.remove", lambda: self.delete_condition(category)))
+        row.addWidget(self._button("action.new", lambda: self.new_condition(category)))
         layout.addLayout(row)
         items = W.QListWidget()
         items.itemDoubleClicked.connect(lambda item: self.edit_condition(category, items.row(item)))
         layout.addWidget(items)
-        layout.addWidget(text_hint("Double-click a condition to edit it. New exits the current edit mode."))
+        layout.addWidget(self._hint("conditions.list_hint"))
         setattr(self, category+"_list", items)
 
     def build_boundary(self):
         layout = self.page("Boundary")
         self.boundary_tabs = W.QTabWidget()
         self.boundary_tabs.setObjectName("boundaryTabs")
-        for title, builder in [("Support", self.build_supports), ("Loads", self.build_loads)]:
+        for title, builder in [(self.tr("page.support_tab"), self.build_supports),
+                               (self.tr("page.loads_tab"), self.build_loads)]:
             section = W.QWidget()
             section_layout = W.QVBoxLayout(section)
             section_layout.setContentsMargins(0, 12, 0, 0)
             builder(section_layout)
             self.boundary_tabs.addTab(section, title)
         layout.addWidget(self.boundary_tabs)
+        # Switching Support <-> Loads is a page switch for the mouse session too.
+        self.boundary_tabs.currentChanged.connect(self._interaction_page_changed)
 
     def build_supports(self, layout):
         layout, form = self.condition_common("supports", "Support", layout)
         self.support_method = W.QComboBox()
-        self.support_method.addItems(["Strong Enforcement | Control Points", "Penalty Enforcement | Boundary XYZ"])
-        form.addRow("Enforcement", self.support_method)
+        self._combo_items(self.support_method, [("conditions.support_method_strong", 0),
+                                                ("conditions.support_method_penalty", 1)])
+        self._form_label(form, self.support_method, "conditions.support_method")
         self.support_side = W.QComboBox()
-        for label, value in [("U-min Boundary", "u0"), ("U-max Boundary", "u1"), ("V-min Boundary", "v0"), ("V-max Boundary", "v1"),
-            ("Corner U-min / V-min", "00"), ("Corner U-max / V-min", "10"), ("Corner U-min / V-max", "01"), ("Corner U-max / V-max", "11"), ("All Control Points", "all")]:
-            self.support_side.addItem(label, value)
-        form.addRow("Parametric Location", self.support_side)
+        self._combo_items(self.support_side, [
+            ("conditions.side.u0", "u0"), ("conditions.side.u1", "u1"),
+            ("conditions.side.v0", "v0"), ("conditions.side.v1", "v1"),
+            ("conditions.side.00", "00"), ("conditions.side.10", "10"),
+            ("conditions.side.01", "01"), ("conditions.side.11", "11"),
+            ("conditions.side.all", "all")])
+        self._form_label(form, self.support_side, "conditions.side")
         self.interval_editor(form, "supports")
         self.support_vector = VectorEditor(True)
         layout.addWidget(self.support_vector)
-        self.clamp = W.QCheckBox("Clamp Adjacent Control-Point Row")
-        self.clamp.setToolTip("Applies to a complete natural parametric boundary. The adjacent control-point row receives the same prescribed displacement components and values.")
+        self.clamp = self._checkbox("conditions.clamp")
+        self._text_registry.apply_tooltip(self.clamp, "conditions.clamp_tooltip")
         layout.addWidget(self.clamp)
         self.penalty = W.QLineEdit("1e7")
-        form.addRow("Penalty Factor", self.penalty)
-        layout.addWidget(text_hint("Strong enforcement supports individual displacement components on natural boundaries and corners. General trimming curves require penalty enforcement, currently restricted to XYZ throughout the analysis interval."))
+        self._form_label(form, self.penalty, "conditions.penalty")
+        layout.addWidget(self._hint("conditions.support_hint"))
         self.condition_list(layout, "supports")
         self.support_method.currentIndexChanged.connect(self.update_support_method)
         self.update_support_method()
@@ -1473,7 +1827,7 @@ class Panel(W.QDockWidget):
         if penalty:
             self.clamp.setChecked(False)
             self.supports_interval[0].setText(self.start_time.text() if hasattr(self,"start_time") else "0.0")
-            self.supports_interval[1].setText("End")
+            self.supports_interval[1].setText(self.tr("conditions.end"))
         for w in self.supports_interval:
             w.setEnabled(not penalty)
         for check in self.support_vector.checks:
@@ -1498,53 +1852,49 @@ class Panel(W.QDockWidget):
                 self.patch_table.item(row,col).setText(str(max(minimum,degree)))
             for col in (5,6):
                 self.patch_table.item(row,col).setText(str(self.bulk_h.value()))
-        self.status.setText(f"Material, formulation and refinement updated for {len(rows)} patches.")
+        self.set_message(self.status, "msg.bulk_applied", count=len(rows))
 
     def build_loads(self, layout):
         layout, form = self.condition_common("loads", "Loads", layout)
         self.load_kind = W.QComboBox()
-        self.load_kind.addItem("Global vector (LINE_LOAD / SURFACE_LOAD / DEAD_LOAD)", "vector")
-        self.load_kind.addItem("Reference normal pressure (dead pressure)", "reference_pressure")
+        self._combo_items(self.load_kind, [("conditions.load_kind_vector", "vector"),
+                                           ("conditions.load_kind_pressure", "reference_pressure")])
         self.load_kind.currentIndexChanged.connect(self.update_load_kind)
-        form.addRow("Load Kind", self.load_kind)
+        self._form_label(form, self.load_kind, "conditions.load_kind")
         self.load_variable = W.QComboBox()
-        self.load_variable.addItems(["LINE_LOAD", "SURFACE_LOAD", "DEAD_LOAD"])
-        form.addRow("Variable", self.load_variable)
+        for variable in ("LINE_LOAD", "SURFACE_LOAD", "DEAD_LOAD"):
+            self.load_variable.addItem(variable, variable)
+        self._form_label(form, self.load_variable, "conditions.variable")
         self.interval_editor(form, "loads")
         self.load_vector = VectorEditor()
         layout.addWidget(self.load_vector)
-        self.pressure_label = W.QLabel("Pressure (signed scalar, stress units)")
+        self.pressure_label = self._label("conditions.pressure")
         self.load_pressure = W.QLineEdit("0.0")
         pressure_row = W.QHBoxLayout()
         pressure_row.addWidget(self.pressure_label)
         pressure_row.addWidget(self.load_pressure)
         layout.addLayout(pressure_row)
-        self.load_normal_flip = W.QCheckBox("Flip reference normal (normal_flip: −n̂_ref)")
+        self.load_normal_flip = self._checkbox("conditions.normal_flip")
         layout.addWidget(self.load_normal_flip)
-        self.load_kind_note = text_hint(
-            "Positive pressure follows the X0 reference normal unit(du×dv) — the Kratos "
-            "parameterization, not the CAD OCCT face orientation. This is a dead/reference "
-            "pressure only; follower/current-normal pressure is NOT supported. The face "
-            "midpoint sample may lie in a trimming hole.")
+        self.load_kind_note = self._hint("conditions.pressure_note")
         layout.addWidget(self.load_kind_note)
         amplitude_header = W.QHBoxLayout()
-        self.load_amplitude_enabled = W.QCheckBox("Piecewise-linear amplitude table (factor, dimensionless)")
+        self.load_amplitude_enabled = self._checkbox("conditions.amplitude")
         self.load_amplitude_enabled.toggled.connect(self._update_amplitude_editor)
         amplitude_header.addWidget(self.load_amplitude_enabled)
         layout.addLayout(amplitude_header)
-        self.load_amplitude_table = self.table(["Time (s)", "Factor"])
+        self.load_amplitude_table = self._table(["conditions.amplitude_time",
+                                                 "conditions.amplitude_factor"])
         self.load_amplitude_table.setMaximumHeight(130)
         layout.addWidget(self.load_amplitude_table)
         amplitude_buttons = W.QHBoxLayout()
-        amplitude_buttons.addWidget(button("Add Row", self.add_amplitude_row))
-        amplitude_buttons.addWidget(button("Remove Row", lambda: self.delete_row(self.load_amplitude_table)))
+        amplitude_buttons.addWidget(self._button("action.add_row", self.add_amplitude_row))
+        amplitude_buttons.addWidget(self._button("action.remove_row",
+                                                 lambda: self.delete_row(self.load_amplitude_table)))
         amplitude_buttons.addStretch(1)
         layout.addLayout(amplitude_buttons)
-        layout.addWidget(text_hint(
-            "Strictly increasing finite times, at least two points; linear interpolation; zero outside "
-            "the table. Times are seconds and the factor is dimensionless — neither is unit-converted. "
-            "The preview draws the base pressure (factor 1) and never implies a current time."))
-        layout.addWidget(text_hint("LINE_LOAD: force per unit length. SURFACE_LOAD: force per unit area. DEAD_LOAD is integrated over the selected geometric measure. Loads are zero outside the active interval."))
+        layout.addWidget(self._hint("conditions.amplitude_hint"))
+        layout.addWidget(self._hint("conditions.load_family_hint"))
         self.condition_list(layout, "loads")
         self.update_load_kind()
 
@@ -1605,30 +1955,46 @@ class Panel(W.QDockWidget):
     def build_initial(self):
         layout, form = self.condition_common("initial_conditions", "Initial")
         self.initial_variable = W.QComboBox()
-        self.initial_variable.addItems(["DISPLACEMENT", "VELOCITY", "ACCELERATION"])
-        form.addRow("Initial Field", self.initial_variable)
+        for variable in ("DISPLACEMENT", "VELOCITY", "ACCELERATION"):
+            self.initial_variable.addItem(variable, variable)
+        self._form_label(form, self.initial_variable, "conditions.initial_field")
         self.initial_vector = VectorEditor(True)
         layout.addWidget(self.initial_vector)
-        layout.addWidget(text_hint("Initial fields are assigned once to all control points of a patch without constraining degrees of freedom. Velocity and acceleration require dynamic analysis; nonzero initial displacement requires nonlinear analysis."))
+        layout.addWidget(self._hint("conditions.initial_hint"))
         self.condition_list(layout, "initial_conditions")
 
     def build_couplings(self):
         layout = self.page("Interfaces")
-        self.coupling_table = self.table(["Edge", "Adjacent Patches", "State", "Source", "Type",
-                                          "Penalty Factor", "Sampled Pair Diagnostic"])
+        self.coupling_table = self._table(["interfaces.table.edge", "interfaces.table.patches",
+                                           "interfaces.table.state", "interfaces.table.source",
+                                           "interfaces.table.type", "interfaces.table.penalty",
+                                           "interfaces.table.diagnostic"])
+        self.coupling_table.itemSelectionChanged.connect(self._coupling_table_selection)
         layout.addWidget(self.coupling_table)
         actions = W.QHBoxLayout()
-        actions.addWidget(button("Confirm Selected Interface", lambda: self.coupling_decision("confirmed", "user")))
-        actions.addWidget(button("Exclude Selected Interface", lambda: self.coupling_decision("excluded", "user")))
-        actions.addWidget(button("Reset to Candidate", lambda: self.coupling_decision("pending", "geometry")))
+        actions.addWidget(self._button("interfaces.confirm",
+                                       lambda: self.coupling_decision("confirmed", "user")))
+        actions.addWidget(self._button("interfaces.exclude",
+                                       lambda: self.coupling_decision("excluded", "user")))
+        actions.addWidget(self._button("interfaces.reset",
+                                       lambda: self.coupling_decision("pending", "geometry")))
         actions.addStretch(1)
         layout.addLayout(actions)
-        layout.addWidget(text_hint("Detected interfaces start as candidates and are never exported. Confirm the ones whose connection model you intend; only confirmed interfaces become Kratos conditions. 'Source' records whether the decision came from you or from an unreviewed legacy default. The pair diagnostic samples both trimming curves on their own source surfaces: it is a sampled gap and direction, not proof of full-edge coincidence, and it is not a weld or hinge model."))
+        mouse_row = W.QHBoxLayout()
+        self.coupling_isolate_button = self._button("interfaces.isolate",
+                                                    self.toggle_coupling_visibility)
+        mouse_row.addWidget(self.coupling_isolate_button)
+        mouse_row.addWidget(self._button("interfaces.start_pick", self.start_coupling_pick))
+        mouse_row.addWidget(self._button("conditions.cancel_pick", self.cancel_interaction))
+        mouse_row.addStretch(1)
+        layout.addLayout(mouse_row)
+        layout.addWidget(self._hint("interfaces.pick_hint"))
+        layout.addWidget(self._hint("interfaces.hint"))
 
     def coupling_decision(self, state, origin):
         row = self.coupling_table.currentRow()
         if row < 0:
-            self.status.setText("Select an interface row first.")
+            self.set_message(self.status, "msg.select_interface_row")
             return
         edge_id = int(self.coupling_table.item(row, 0).text())
         record = next((c for c in self.project["couplings"] if c["edge_id"] == edge_id), None)
@@ -1641,60 +2007,57 @@ class Panel(W.QDockWidget):
         record["rotation"] = bool(self.coupling_table.cellWidget(row, 4).currentData())
         record["state"], record["origin"] = state, origin
         self.refresh()
-        self.status.setText(f"Interface {edge_id}: {state} (source: {origin}).")
+        self.set_message(self.status, "msg.interface_state", edge=edge_id, state=state,
+                         origin=origin)
 
     def build_preview(self):
         layout = self.page("Preview")
-        layout.addWidget(text_hint(
-            "Display-only preprocessing inspection. Every glyph is generated from the current "
-            "project assignment and the cached CAD surface; it never writes geometry.cad.json, "
-            "never changes Shape or Placement, and never enters the analysis entity map or a "
-            "controlled snapshot. Material colouring uses ViewObject only and is restored when "
-            "the layer is switched off."))
-        self.preview_supports = W.QCheckBox("Supports (strong / penalty, components, clamp)")
-        self.preview_loads = W.QCheckBox("Loads (XYZ arrows, family scales/units, zero marker)")
-        self.preview_frame = W.QCheckBox("Background parameter frame (u / v / normal)")
-        self.preview_materials = W.QCheckBox("Material / Section legend (ViewObject colour)")
+        layout.addWidget(self._hint("preview.hint"))
+        self.preview_supports = self._checkbox("preview.supports")
+        self.preview_loads = self._checkbox("preview.loads")
+        self.preview_frame = self._checkbox("preview.frame")
+        self.preview_materials = self._checkbox("preview.materials")
         for box in (self.preview_supports, self.preview_loads, self.preview_frame,
                     self.preview_materials):
             box.toggled.connect(self._preview_toggle_changed)
             layout.addWidget(box)
         row = W.QHBoxLayout()
-        row.addWidget(button("Rebuild Preview", lambda: self.guard(self.refresh_preview)))
-        row.addWidget(button("Clear Preview", lambda: self.guard(self.clear_preview)))
+        row.addWidget(self._button("preview.rebuild", lambda: self.guard(self.refresh_preview)))
+        row.addWidget(self._button("preview.clear", lambda: self.guard(self.clear_preview)))
         row.addStretch(1)
         layout.addLayout(row)
-        self.preview_status = text_hint("Preview is idle. Enable a layer to inspect the assignment.")
+        self.preview_status = self._hint("preview.idle")
         layout.addWidget(self.preview_status)
-        layout.addWidget(W.QLabel("Analysis refinement: original → target (estimate; verify after Initialize)"))
-        self.preview_refinement_table = self.table(
-            ["Face", "Active", "Orig p (u,v)", "Target p (u,v)", "Spans u/v", "Orig CP u×v",
-             "Est. CP u×v", "Insert u/v", "min C"])
+        layout.addWidget(self._label("preview.refinement_heading"))
+        self.preview_refinement_table = self._table(
+            ["preview.table.face", "preview.table.active", "preview.table.orig_p",
+             "preview.table.target_p", "preview.table.spans", "preview.table.orig_cp",
+             "preview.table.est_cp", "preview.table.insert", "preview.table.min_c"])
         self.preview_refinement_table.setMaximumHeight(190)
         layout.addWidget(self.preview_refinement_table)
-        layout.addWidget(W.QLabel("Quadrature request (separate from refinement and display)"))
+        layout.addWidget(self._label("preview.quadrature_heading"))
         self.preview_quadrature = text_hint("")
         layout.addWidget(self.preview_quadrature)
-        layout.addWidget(W.QLabel("Display sampling (display only; not the integration domain)"))
+        layout.addWidget(self._label("preview.display_heading"))
         self.preview_display = text_hint("")
         layout.addWidget(self.preview_display)
-        layout.addWidget(W.QLabel("Material / Section legend: exact current assignments"))
+        layout.addWidget(self._label("preview.legend_heading"))
         self.preview_legend = text_hint("")
         layout.addWidget(self.preview_legend)
-        layout.addWidget(W.QLabel("Geometry diagnostics (reported, never repaired)"))
+        layout.addWidget(self._label("preview.diagnostics_heading"))
         self.preview_diagnostics = text_hint("")
         layout.addWidget(self.preview_diagnostics)
-        layout.addWidget(W.QLabel("Inactive (outside the analysis domain): no physics glyph drawn"))
+        layout.addWidget(self._label("preview.inactive_heading"))
         self.preview_inactive = text_hint("")
         layout.addWidget(self.preview_inactive)
-        layout.addWidget(W.QLabel("Background-frame legend (independent axes)"))
+        layout.addWidget(self._label("preview.frame_heading"))
         self.preview_frame_legend = text_hint("")
         layout.addWidget(self.preview_frame_legend)
-        layout.addWidget(W.QLabel("Glyph notes (components, clamp, samples, scales)"))
+        layout.addWidget(self._label("preview.notes_heading"))
         self.preview_notes = W.QPlainTextEdit()
         self.preview_notes.setReadOnly(True)
         self.preview_notes.setMaximumHeight(150)
-        self.preview_notes.setPlaceholderText("Per-glyph notes appear here.")
+        self._text_registry.apply_placeholder(self.preview_notes, "preview.notes_placeholder")
         layout.addWidget(self.preview_notes)
         layout.addStretch(1)
 
@@ -1795,7 +2158,8 @@ class Panel(W.QDockWidget):
                 "active": bool(self.assignment_table.cellWidget(r, 5).isChecked()),
                 **{key: int(cell(self.patch_table, r, c)) for c, key in enumerate(("degree_u", "degree_v", "insert_u", "insert_v"), 3)}} for r in range(self.patch_table.rowCount())]
             couplings = [{"edge_id": int(cell(self.coupling_table, r, 0)),
-                "state": cell(self.coupling_table, r, 2), "origin": cell(self.coupling_table, r, 3),
+                "state": str(self._canonical_cell(self.coupling_table, r, 2)),
+                "origin": str(self._canonical_cell(self.coupling_table, r, 3)),
                 "penalty": float(cell(self.coupling_table, r, 5)),
                 "rotation": bool(self.coupling_table.cellWidget(r, 4).currentData())}
                 for r in range(self.coupling_table.rowCount())]
@@ -1870,7 +2234,7 @@ class Panel(W.QDockWidget):
             if notes is not None:
                 notes.setPlainText("")
             if getattr(self, "preview_status", None) is not None:
-                self.preview_status.setText(message or "Preview is idle.")
+                self.set_message(self.preview_status, message or "msg.preview_idle")
             return
         refinement = report.get("refinement") or {}
         if table is not None:
@@ -1944,19 +2308,25 @@ class Panel(W.QDockWidget):
             length_unit = report.get("length_unit", "mm")
             scale_text = " ".join(
                 f"{family}: 1 {entry['unit']} ↔ {entry['scale']:.4g} {length_unit}"
-                for family, entry in sorted(scales.items()) if entry.get("scale")) or "no load scale"
+                for family, entry in sorted(scales.items()) if entry.get("scale")) \
+                or self.tr("msg.preview_no_scale")
             blocked = report.get("blocked")
             if blocked:
-                self.preview_status.setText(f"Preview blocked by a valid diagnostic: {blocked}")
+                self.set_message(self.preview_status, "msg.preview_diagnostic", detail=blocked)
             elif message:
                 self.preview_status.setText(message)
             else:
-                text = (f"Preview: {report.get('supports', 0)} support · {report.get('loads', 0)} load "
-                        f"· {report.get('frames', 0)} frame axis object(s); "
-                        f"{report.get('materials', 0)} face(s) recoloured. {scale_text}.")
-                text += f" Source: {report.get('widget_state', 'committed assignment')}."
+                text = self.tr("msg.preview_summary",
+                               supports=report.get('supports', 0),
+                               loads=report.get('loads', 0),
+                               frames=report.get('frames', 0),
+                               materials=report.get('materials', 0))
+                text += " " + self.tr("msg.preview_scales", scales=scale_text)
+                text += " " + self.tr("msg.preview_source",
+                                      source=report.get('widget_state', 'committed assignment'))
                 if inactive or inactive_frames:
-                    text += f" {len(inactive) + len(inactive_frames)} inactive target(s) have no glyph."
+                    text += " " + self.tr("msg.preview_inactive_targets",
+                                          count=len(inactive) + len(inactive_frames))
                 self.preview_status.setText(text)
 
     def _invalidate_run_report(self, *_args):
@@ -1975,10 +2345,10 @@ class Panel(W.QDockWidget):
             view.setPlainText("")
         status = getattr(self, "run_report_status", None)
         if status is not None:
-            status.setText("No initialized report. Export a model and press Initialize Exported Model.")
+            self.set_message(status, "msg.no_initialized_report")
         path_label = getattr(self, "run_report_path", None)
         if path_label is not None:
-            path_label.setText("Run directory: none yet.")
+            self.set_message(path_label, "msg.run_dir_none")
 
     def refresh_run_report(self):
         """Read the exact run directory's report after a run; read-only.
@@ -2003,14 +2373,13 @@ class Panel(W.QDockWidget):
             report_path = folder / "export_report.json"
             source = "export_report.json"
         if path_label is not None:
-            path_label.setText(f"Run directory: {folder}")
+            self.set_message(path_label, "msg.run_dir", folder=folder)
         if not report_path.is_file():
             self.initialized_report = None
             if view is not None:
                 view.setPlainText("")
             if status is not None:
-                status.setText(f"No run_report.json in this run yet ({folder.name}); press "
-                               "Initialize Exported Model or Run Exported Analysis.")
+                self.set_message(status, "msg.no_report_yet", folder=folder.name)
             return None
         try:
             data = read_json(report_path)
@@ -2019,22 +2388,23 @@ class Panel(W.QDockWidget):
             if view is not None:
                 view.setPlainText("")
             if status is not None:
-                status.setText(f"Unreadable {source} in {folder.name}: {exc}")
+                self.set_message(status, "msg.unreadable_report", source=source,
+                                 folder=folder.name, error=exc)
             return None
         self.initialized_report = data
         if status is not None:
             mode = data.get("mode")
             if source != "run_report.json":
-                status.setText(f"Exported case only (this run produced no report): "
-                               f"{folder.name} · {source}; initialized statistics are unknown")
+                self.set_message(status, "msg.export_only", folder=folder.name, source=source)
             elif mode == "initialize":
-                status.setText(f"Initialized run: {folder.name} · {source} · "
-                               f"mode={mode} (pre-solve)")
+                self.set_message(status, "msg.initialized_run", folder=folder.name,
+                                 source=source, mode=mode)
             elif mode == "solve":
-                status.setText(f"Solved run: {folder.name} · {source} · "
-                               f"mode={mode}; area frozen from Initialize")
+                self.set_message(status, "msg.solved_run", folder=folder.name,
+                                 source=source, mode=mode)
             else:
-                status.setText(f"Run report: {folder.name} · {source} · mode={mode}")
+                self.set_message(status, "msg.run_report", folder=folder.name,
+                                 source=source, mode=mode)
         if view is not None:
             view.setPlainText(self._format_run_report(data))
         return data
@@ -2118,87 +2488,75 @@ class Panel(W.QDockWidget):
 
     def build_result_section(self, layout):
         """The Analysis-page result controls. Widget construction only."""
-        heading = W.QLabel("Result display · native results.vtkhdf read through the backend Python")
+        heading = W.QLabel()
         heading.setObjectName("sectionTitle")
+        self._text(heading, "result.heading")
         layout.addWidget(heading)
         run_row = W.QHBoxLayout()
         self.result_run_dir = W.QComboBox()
         self.result_run_dir.setEditable(True)
-        self.result_run_dir.setToolTip(
-            "One isolated run directory. The default is this panel's last run; older "
-            "independent run directories beside the export can be selected as well.")
+        self._text_registry.apply_tooltip(self.result_run_dir, "result.run_dir_tooltip")
         run_row.addWidget(self.result_run_dir, 1)
-        run_row.addWidget(button("Use Last Run", self.use_last_result_run))
-        run_row.addWidget(button("Browse Run…", self.browse_result_run))
+        run_row.addWidget(self._button("result.use_last", self.use_last_result_run))
+        run_row.addWidget(self._button("result.browse", self.browse_result_run))
         layout.addLayout(run_row)
         options = W.QHBoxLayout()
         self.result_step = W.QComboBox()
-        self.result_step.setToolTip(
-            "The real recorded time-step index from the VTKHDF Steps/Values block; steps are "
-            "never interpolated.")
-        options.addWidget(W.QLabel("Step"))
+        self._text_registry.apply_tooltip(self.result_step, "result.step_tooltip")
+        options.addWidget(self._label("result.step"))
         options.addWidget(self.result_step, 1)
         self.result_component = W.QComboBox()
         for component in RESULT_COMPONENTS:
-            self.result_component.addItem(component, component)
-        self.result_component.setToolTip("Displayed displacement component or magnitude.")
-        options.addWidget(W.QLabel("Component"))
+            key = ("result.magnitude" if component == "magnitude" else "result.component_axis")
+            index = self.result_component.count()
+            self.result_component.addItem("", component)
+            if component == "magnitude":
+                self._text_registry.register_item(self.result_component, index, key)
+            else:
+                self._text_registry.register_item(self.result_component, index, key,
+                                                  axis=component)
+        self._text_registry.apply_tooltip(self.result_component, "result.component_tooltip")
+        options.addWidget(self._label("result.component"))
         options.addWidget(self.result_component)
         self.result_scale = spin(1.0, 0.0, 1000.0, 4)
-        self.result_scale.setToolTip(
-            "Multiplies only the selected step's displacement; 0 restores the reference "
-            "sampling geometry.")
-        options.addWidget(W.QLabel("Scale"))
+        self._text_registry.apply_tooltip(self.result_scale, "result.scale_tooltip")
+        options.addWidget(self._label("result.scale"))
         options.addWidget(self.result_scale)
         layout.addLayout(options)
         buttons = W.QHBoxLayout()
-        self.result_load_button = button("Load Result Metadata", self.load_result_metadata)
-        self.result_draw_button = button("Draw Result Frame", self.draw_result_frame)
-        self.result_clear_button = button(
-            "Clear Result Display",
-            lambda: self.clear_result_display(message="Result display cleared."))
+        self.result_load_button = self._button("result.load_metadata", self.load_result_metadata)
+        self.result_draw_button = self._button("result.draw_frame", self.draw_result_frame)
+        self.result_clear_button = self._button(
+            "result.clear",
+            lambda: self.clear_result_display(message=self.tr("result.cleared")))
         for widget in (self.result_load_button, self.result_draw_button,
                        self.result_clear_button):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout.addLayout(buttons)
-        self.result_status = text_hint(
-            "No result is loaded. Choose a run directory and press Load Result Metadata.")
+        self.result_status = self._hint("result.none_loaded")
         layout.addWidget(self.result_status)
-        self.result_mapping_note = text_hint(
-            "face/UV unavailable: a plain VTKHDF carries no face/UV mapping, so the drawn "
-            "native sampling cells are NOT the trimmed integration domain and a drawn frame is "
-            "not a verification. The frame is read through the backend Python and is never "
-            "written to disk.")
+        self.result_mapping_note = self._hint("result.mapping_note")
         layout.addWidget(self.result_mapping_note)
         self.result_metadata_view = W.QPlainTextEdit()
         self.result_metadata_view.setReadOnly(True)
         self.result_metadata_view.setMaximumHeight(150)
-        self.result_metadata_view.setPlaceholderText(
-            "Native results.vtkhdf metadata: case phase, association, point/cell counts and the "
-            "real recorded step times appear here after Load Result Metadata.")
+        self._text_registry.apply_placeholder(self.result_metadata_view, "result.metadata_placeholder")
         layout.addWidget(self.result_metadata_view)
         self.result_extrema_view = W.QPlainTextEdit()
         self.result_extrema_view.setReadOnly(True)
         self.result_extrema_view.setMaximumHeight(110)
-        self.result_extrema_view.setPlaceholderText(
-            "Extrema of the displayed component with their real positions appear here after "
-            "Draw Result Frame.")
+        self._text_registry.apply_placeholder(self.result_extrema_view, "result.extrema_placeholder")
         layout.addWidget(self.result_extrema_view)
         self.result_evidence_view = W.QPlainTextEdit()
         self.result_evidence_view.setReadOnly(True)
         self.result_evidence_view.setMaximumHeight(140)
-        self.result_evidence_view.setPlaceholderText(
-            "Static validation, initialization, solve and reference-case evidence are listed "
-            "independently; a level is only shown when its own evidence exists.")
+        self._text_registry.apply_placeholder(self.result_evidence_view, "result.evidence_placeholder")
         layout.addWidget(self.result_evidence_view)
         self.result_forces_view = W.QPlainTextEdit()
         self.result_forces_view.setReadOnly(True)
         self.result_forces_view.setMaximumHeight(170)
-        self.result_forces_view.setPlaceholderText(
-            "Separated force / equilibrium evidence from run_report.json: strong support "
-            "reactions, applied loads and the raw, unsigned penalty contributions, each with "
-            "its own status. Penalty physics reactions are never invented.")
+        self._text_registry.apply_placeholder(self.result_forces_view, "result.forces_placeholder")
         layout.addWidget(self.result_forces_view)
 
     def _known_run_dirs(self):
@@ -2242,22 +2600,22 @@ class Panel(W.QDockWidget):
 
     def use_last_result_run(self):
         if not self.last_run or not Path(self.last_run).is_dir():
-            self.status.setText("No run directory is available yet; press Initialize or Run first.")
+            self.set_message(self.status, "msg.no_run_dir")
             return
         combo = getattr(self, "result_run_dir", None)
         if combo is not None:
             combo.setCurrentText(str(self.last_run))
-        self.status.setText(f"Result run directory set to the last run: {self.last_run}")
+        self.set_message(self.status, "msg.result_last_run", run=self.last_run)
 
     def browse_result_run(self):
         folder = W.QFileDialog.getExistingDirectory(
-            self, "Select an Isolated Run Directory", str(self.work_dir))
+            self, self.tr("dialog.result_run_dir"), str(self.work_dir))
         if not folder:
             return
         combo = getattr(self, "result_run_dir", None)
         if combo is not None:
             combo.setCurrentText(folder)
-        self.status.setText(f"Result run directory selected: {folder}")
+        self.set_message(self.status, "msg.result_run_selected", run=folder)
 
     def _read_result_run_report(self, run_dir):
         path = Path(run_dir) / "run_report.json"
@@ -2342,14 +2700,14 @@ class Panel(W.QDockWidget):
                 self.result_layer.clear(None)
             except Exception as error:  # noqa: BLE001
                 if log is not None:
-                    log.appendPlainText(f"Result display cleanup reported: {error}")
+                    log.appendPlainText(self.tr("msg.result_cleanup", error=error))
             return
         for target in targets:
             try:
                 self.result_layer.clear(target)
             except Exception as error:  # noqa: BLE001 - best effort while closing a document
                 if log is not None:
-                    log.appendPlainText(f"Result display cleanup reported: {error}")
+                    log.appendPlainText(self.tr("msg.result_cleanup", error=error))
 
     def _selected_result_step(self):
         combo = getattr(self, "result_step", None)
@@ -2446,15 +2804,17 @@ class Panel(W.QDockWidget):
         status = getattr(self, "result_status", None)
         if status is not None:
             if state.error:
-                status.setText(f"Result error: {state.error}")
+                self.set_message(status, "msg.result_error", error=state.error)
             elif state.status_text:
-                status.setText(state.status_text)
+                source = getattr(state, "ui_status", None)
+                if source:
+                    self.set_message(status, source[0], **source[1])
+                else:
+                    status.setText(state.status_text)
             elif state.metadata:
-                status.setText("Result metadata loaded; press Draw Result Frame to display a "
-                               "frame.")
+                self.set_message(status, "msg.result_metadata_loaded")
             else:
-                status.setText("No result is loaded. Choose a run directory and press Load "
-                               "Result Metadata.")
+                self.set_message(status, "result.none_loaded")
         self._refresh_result_evidence()
 
     def clear_result_display(self, doc=None, message=None, drop_metadata=True, full=False):
@@ -2513,8 +2873,11 @@ class Panel(W.QDockWidget):
             self.result_state.status_text = (
                 f"Result metadata loaded for {Path(run_dir).name}; "
                 f"{len(payload.get('vtkhdf', {}).get('times') or [])} recorded step(s).")
+            self.result_state.ui_status = ("result.loaded_run_status", {
+                "run": Path(run_dir).name,
+                "steps": len(payload.get("vtkhdf", {}).get("times") or [])})
             self._render_result_views()
-            self.status.setText(self.result_state.status_text)
+            self.set_message(self.status, self.result_state.ui_status[0], **self.result_state.ui_status[1])
         self.guard(operation)
 
     def draw_result_frame(self):
@@ -2545,8 +2908,11 @@ class Panel(W.QDockWidget):
                 "only; face/UV mapping is unavailable.".format(
                     payload["step"]["index"], _format_value(payload["step"]["time"]),
                     payload["step"]["component"], _format_value(payload["step"]["scale"])))
+            self.result_state.ui_status = ("result.drawn_status", {
+                "step": payload["step"]["index"], "time": _format_value(payload["step"]["time"]),
+                "component": payload["step"]["component"], "scale": _format_value(payload["step"]["scale"])})
             self._render_result_views()
-            self.status.setText(self.result_state.status_text)
+            self.set_message(self.status, self.result_state.ui_status[0], **self.result_state.ui_status[1])
         self.guard(operation)
 
     def _refresh_run_report_and_results(self):
@@ -2559,53 +2925,54 @@ class Panel(W.QDockWidget):
         layout = self.page("Analysis")
         form = W.QFormLayout()
         self.solver_type = W.QComboBox()
-        self.solver_type.addItem("Static", "static")
-        self.solver_type.addItem("Implicit Dynamic", "dynamic")
+        self._combo_items(self.solver_type, [("analysis.static", "static"),
+                                             ("analysis.dynamic", "dynamic")])
         self.analysis_type = W.QComboBox()
-        self.analysis_type.addItem("Linear", "linear")
-        self.analysis_type.addItem("Nonlinear", "non_linear")
+        self._combo_items(self.analysis_type, [("analysis.linear", "linear"),
+                                               ("analysis.nonlinear", "non_linear")])
         self.start_time, self.end_time, self.time_step = W.QLineEdit("0.0"), W.QLineEdit("1.0"), W.QLineEdit("1.0")
-        for label, w in [("Solver", self.solver_type), ("Analysis", self.analysis_type), ("Start Time", self.start_time), ("End Time", self.end_time), ("Time Increment", self.time_step)]:
-            form.addRow(label, w)
-        self.vtk = W.QCheckBox("Export Displacement to VTKHDF")
+        for key, w in [("analysis.solver", self.solver_type),
+                       ("analysis.analysis_type", self.analysis_type),
+                       ("analysis.start_time", self.start_time),
+                       ("analysis.end_time", self.end_time),
+                       ("analysis.time_step", self.time_step)]:
+            self._form_label(form, w, key)
+        self.vtk = self._checkbox("analysis.vtk_output")
         self.vtk.setChecked(True)
         self.output_refinement = spin(4, 1, 100)
         form.addRow(self.vtk)
-        form.addRow("Visualization Subdivision", self.output_refinement)
+        self._form_label(form, self.output_refinement, "analysis.output_refinement")
         document_row = W.QHBoxLayout()
-        document_row.addWidget(button("Save to Document", self.save_to_document))
-        document_row.addWidget(button("Restore Document", self.restore_document))
+        document_row.addWidget(self._button("analysis.save_to_document", self.save_to_document))
+        document_row.addWidget(self._button("analysis.restore_document", self.restore_document))
         document_row.addStretch(1)
         layout.addLayout(document_row)
-        layout.addWidget(text_hint("Save to Document writes the committed project into the open .FCStd through the native save observer. Restore Document is the document entry point; Open JSON stays a separate, explicit entry point - they are never chosen silently by timestamp."))
+        layout.addWidget(self._hint("analysis.document_hint"))
         layout.addLayout(form)
         self.backend_python = W.QLineEdit(self.settings["backend_python"])
         self.pipeline_root = W.QLineEdit(self.settings["pipeline_root"])
-        form.addRow("Backend Python Executable", self.backend_python)
-        form.addRow("Conversion Pipeline Directory", self.pipeline_root)
+        self._form_label(form, self.backend_python, "analysis.backend_python_label")
+        self._form_label(form, self.pipeline_root, "analysis.pipeline_root_label")
         self.work_directory = W.QLineEdit(str(self.work_dir))
-        form.addRow("Working Directory", self.work_directory)
-        layout.addWidget(button("Save Backend Configuration", lambda: self.guard(self.save_backend_configuration)))
-        layout.addWidget(button("Check Backend Environment", lambda: self.guard(self.check_backend_environment)))
-        layout.addWidget(text_hint("Export CAD geometry, refinement, constitutive properties, boundary conditions and solver configuration. Backend: Kratos 10.4.3 with the required structural analysis applications."))
-        layout.addWidget(button("Export CAD Geometry Only", self.export_geometry))
-        layout.addWidget(button("Initialize Exported Model", lambda: self.run_case(True)))
-        layout.addWidget(button("Run Exported Analysis", lambda: self.run_case(False)))
-        layout.addWidget(button("Stop Background Task", self.cancel))
-        layout.addWidget(W.QLabel("Result of this run only (read-only report)"))
-        self.run_report_path = text_hint("Run directory: none yet.")
+        self._form_label(form, self.work_directory, "analysis.work_dir_label")
+        layout.addWidget(self._button("analysis.save_backend",
+                                      lambda: self.guard(self.save_backend_configuration)))
+        layout.addWidget(self._button("analysis.check_backend",
+                                      lambda: self.guard(self.check_backend_environment)))
+        layout.addWidget(self._hint("analysis.export_hint"))
+        layout.addWidget(self._button("analysis.export_geometry", self.export_geometry))
+        layout.addWidget(self._button("analysis.initialize", lambda: self.run_case(True)))
+        layout.addWidget(self._button("analysis.run", lambda: self.run_case(False)))
+        layout.addWidget(self._button("analysis.stop_task", self.cancel))
+        layout.addWidget(self._label("analysis.run_report_heading_own"))
+        self.run_report_path = self._hint("analysis.run_dir_none")
         layout.addWidget(self.run_report_path)
-        self.run_report_status = text_hint(
-            "No initialized report. Export a model and press Initialize Exported Model.")
+        self.run_report_status = self._hint("analysis.no_report")
         layout.addWidget(self.run_report_status)
         self.run_report_view = W.QPlainTextEdit()
         self.run_report_view.setReadOnly(True)
         self.run_report_view.setMaximumHeight(240)
-        self.run_report_view.setPlaceholderText(
-            "Each Initialize/Run writes a new isolated run directory beside the export and copies "
-            "only the exported inputs; this run's nodes, active nodes, DOF totals, integration "
-            "counts, per-patch initialized degree/control points/area and the area_check status "
-            "appear here. Fields the report does not carry are shown as unknown.")
+        self._text_registry.apply_placeholder(self.run_report_view, "analysis.run_report_placeholder")
         layout.addWidget(self.run_report_view)
         for table in (self.material_table, self.section_table, self.patch_table,
                       self.assignment_table):
@@ -2615,10 +2982,12 @@ class Panel(W.QDockWidget):
         layout.addStretch()
 
     def error(self, error):
-        self.status.setText("Operation failed: "+str(error))
+        # A backend-originated message stays raw as technical detail; only the
+        # plugin's own summary follows the selected language.
+        self.set_message(self.status, "msg.operation_failed", error=error)
         self.log.appendPlainText(str(error))
         self.log.show()
-        self.log_toggle.setText("Hide Log")
+        self._text(self.log_toggle, "log.hide")
 
     def guard(self, callback):
         try:
@@ -2628,7 +2997,7 @@ class Panel(W.QDockWidget):
             return None
 
     def choose_profile(self):
-        path, _ = W.QFileDialog.getOpenFileName(self, "Conversion Profile", str(Path.home()), "JSON (*.json)")
+        path, _ = W.QFileDialog.getOpenFileName(self, self.tr("dialog.conversion_profile"), str(Path.home()), "JSON (*.json)")
         if path:
             self.profile.setText(path)
 
@@ -2640,7 +3009,7 @@ class Panel(W.QDockWidget):
                 raise ValueError("A background task is already running; wait for it before importing.")
             if self.snapshot:
                 raise ValueError("A controlled snapshot is pending; apply or cancel it before importing.")
-            path, _ = W.QFileDialog.getOpenFileName(self, "Import STEP", str(Path.home()), "STEP (*.stp *.step *.STP *.STEP)")
+            path, _ = W.QFileDialog.getOpenFileName(self, self.tr("dialog.import_step"), str(Path.home()), "STEP (*.stp *.step *.STP *.STEP)")
             if path:
                 self.pending_project = None
                 self.start_import(path)
@@ -2686,7 +3055,7 @@ class Panel(W.QDockWidget):
         self.stop_button.setEnabled(True)
         self.progress.show()
         self.tabs.setEnabled(False)
-        self.status.setText("Background task in progress…")
+        self.set_message(self.status, "msg.task_running")
         timer = QtCore.QTimer(self)
         offset = 0
         def poll():
@@ -2702,7 +3071,7 @@ class Panel(W.QDockWidget):
                 return
             timer.stop()
             timer.deleteLater()
-            self.status.setText("Completed" if code == 0 else "Background task failed or was stopped. Inspect the log.")
+            self.set_message(self.status, "msg.task_done" if code == 0 else "msg.task_failed")
             if code == 0:
                 self.guard(callback)
             if completion is not None:
@@ -2716,7 +3085,7 @@ class Panel(W.QDockWidget):
             self.tabs.setEnabled(True)
             if code != 0:
                 self.log.show()
-                self.log_toggle.setText("Hide Log")
+                self._text(self.log_toggle, "log.hide")
         timer.timeout.connect(poll)
         timer.start(250)
 
@@ -2746,8 +3115,7 @@ class Panel(W.QDockWidget):
                 self.detach_from_document()
                 self.project = pending
                 self.pending_project = None
-                self.status.setText("Geometry changed: every binding is pending rebind. "
-                                    "Resolve them in Groups before exporting.")
+                self.set_message(self.status, "msg.geometry_changed_rebind")
             else:
                 self.detach_from_document()
                 self.project = self.pending_project
@@ -2771,10 +3139,14 @@ class Panel(W.QDockWidget):
             getattr(self, category+"_target").clear()
         self.refresh()
         self.attach_to_document()
-        self.status.setText("Geometry imported | Define material properties and analysis conditions.")
+        self.set_message(self.status, "msg.geometry_imported")
 
     def show_geometry(self, reuse_document=None):
         reusing = (reuse_document is not None and reuse_document.Name in App.listDocuments())
+        # Reimport/restore invalidates the picking session: remove the temporary
+        # Selection/Coin callbacks and restore the visibility we changed first.
+        if self.interaction is not None:
+            self.interaction.on_import()
         self.clear_preview(reuse_document if reusing else None)
         # A new/rebuilt model invalidates every drawn result: remove our marked objects and
         # restore the CAD visibility we changed, in the old and the incoming document.
@@ -2867,9 +3239,16 @@ class Panel(W.QDockWidget):
         self.geometry_rows = []
         for f in self.index["faces"]:
             self.table_row(self.geometry_table, ["Patch", f["id"], str(f["degrees"])])
+            item = self.geometry_table.item(self.geometry_table.rowCount() - 1, 0)
+            display_cell(item, "interaction.kind.face")
+            self._text_registry.register_cell(item, "interaction.kind.face")
             self.geometry_rows.append(("face", f["id"]))
         for e in self.index["edges"]:
             self.table_row(self.geometry_table, ["Interfaces" if e["kind"] == "coupling" else "Edge", e["id"], str(e["face_ids"])])
+            key = "interaction.kind.coupling" if e["kind"] == "coupling" else "interaction.kind.edge"
+            item = self.geometry_table.item(self.geometry_table.rowCount() - 1, 0)
+            display_cell(item, key)
+            self._text_registry.register_cell(item, key)
             self.geometry_rows.append((e["kind"], e["id"]))
         self.geometry_table.blockSignals(False)
         self.material_table.setRowCount(0)
@@ -2888,7 +3267,7 @@ class Panel(W.QDockWidget):
             assignment_element.setCurrentIndex(assignment_element.findData(p["element"]))
             active = W.QCheckBox()
             active.setChecked(bool(p.get("active", True)))
-            active.setToolTip("Inactive patches are excluded from physics, materials, refinement and VTK output; the CAD geometry stays as reference.")
+            active.setToolTip(self.tr("materials.patch.active_tooltip"))
             self.table_row(self.assignment_table, [p["face_id"], p["material_id"], p.get("section_id"), assignment_element, p["quadrature"], active], (0,))
             if not active.isChecked():
                 for column in range(self.assignment_table.columnCount()):
@@ -2902,12 +3281,15 @@ class Panel(W.QDockWidget):
         for c in self.project["couplings"]:
             edge = edges.get(c["edge_id"], {})
             rotation = W.QComboBox()
-            rotation.addItem("Displacement only", False)
-            rotation.addItem("Displacement + rotation", True)
-            rotation.setCurrentIndex(1 if c.get("rotation") else 0)
+            self._combo_items(rotation, [("interfaces.rotation_displacement", False),
+                                         ("interfaces.rotation_both", True)],
+                              current=bool(c.get("rotation")))
             self.table_row(self.coupling_table, [c["edge_id"], str(edge.get("face_ids", [])),
                 c.get("state", "?"), c.get("origin", "?"), rotation, c.get("penalty"),
                 coupling_summary(c["edge_id"], edge.get("diagnostics"))], (0, 1, 2, 3, 6))
+            row = self.coupling_table.rowCount() - 1
+            self._register_coupling_cell(row, 2, c.get("state", "?"), "state")
+            self._register_coupling_cell(row, 3, c.get("origin", "?"), "origin")
         self.refresh_group_choosers()
         for category in ("supports", "loads", "initial_conditions"):
             self.refresh_conditions(category)
@@ -2921,7 +3303,10 @@ class Panel(W.QDockWidget):
         self.analysis_type.setCurrentIndex(self.analysis_type.findData(self.project["solver"]["analysis_type"]))
         self.vtk.setChecked(self.project["output"]["vtk"])
         self.output_refinement.setValue(self.project["output"]["refinement"])
-        self.summary.setText(f"{Path(self.project['source_step']).name}   |   Patches: {len(self.index['faces'])}   |   Interfaces: {len(self.project['couplings'])}")
+        self.set_message(self.summary, "msg.summary_line",
+                         name=Path(self.project['source_step']).name,
+                         patches=len(self.index['faces']),
+                         interfaces=len(self.project['couplings']))
         for table in (self.geometry_table, self.material_table, self.section_table, self.assignment_table, self.patch_table, self.coupling_table):
             table.resizeColumnsToContents()
         self.guard(self.refresh_preview)
@@ -2959,7 +3344,8 @@ class Panel(W.QDockWidget):
             "active": bool(self.assignment_table.cellWidget(r, 5).isChecked()),
             **{key: int(cell(self.patch_table, r, c)) for c, key in enumerate(("degree_u", "degree_v", "insert_u", "insert_v"), 3)}} for r in range(self.patch_table.rowCount())]
         self.project["couplings"] = [{"edge_id": int(cell(self.coupling_table, r, 0)),
-            "state": cell(self.coupling_table, r, 2), "origin": cell(self.coupling_table, r, 3),
+            "state": str(self._canonical_cell(self.coupling_table, r, 2)),
+            "origin": str(self._canonical_cell(self.coupling_table, r, 3)),
             "penalty": float(cell(self.coupling_table, r, 5)),
             "rotation": bool(self.coupling_table.cellWidget(r, 4).currentData())}
             for r in range(self.coupling_table.rowCount())]
@@ -2975,8 +3361,8 @@ class Panel(W.QDockWidget):
     def _update_unit_status(self):
         current = self.project["units"]
         target = self.units.currentText()
-        pending = "" if target == current else f"   |   Selected target: {target} (NOT applied)"
-        self.current_units.setText(f"Current project units: {current}{pending}")
+        pending = "" if target == current else self.tr("msg.units_pending", target=target)
+        self.set_message(self.current_units, "materials.current_units", units=current + pending)
 
     def _pending_condition_edit(self):
         if self.editing:
@@ -2992,11 +3378,11 @@ class Panel(W.QDockWidget):
         if category == "supports":
             self.support_vector.set([None, None, None])
             self.supports_interval[0].setText("0.0")
-            self.supports_interval[1].setText("End")
+            self.supports_interval[1].setText(self.tr("conditions.end"))
         elif category == "loads":
             self.load_vector.set([0.0, 0.0, 0.0])
             self.loads_interval[0].setText("0.0")
-            self.loads_interval[1].setText("End")
+            self.loads_interval[1].setText(self.tr("conditions.end"))
             self.load_pressure.setText("0.0")
             self.load_normal_flip.setChecked(False)
             self.load_kind.setCurrentIndex(0)
@@ -3019,7 +3405,7 @@ class Panel(W.QDockWidget):
         """Discard the in-progress edit and its captured selection ('New' button)."""
         self.editing.pop(category, None)
         self._reset_condition_editor(category)
-        self.status.setText(f"Cleared the {category} editor; captured selection discarded.")
+        self.set_message(self.status, "conditions.cleared", category=category)
 
     def _pending_condition_edit(self):
         if self.editing:
@@ -3030,7 +3416,7 @@ class Panel(W.QDockWidget):
     def convert_units(self):
         target = self.units.currentText()
         if target == self.project["units"]:
-            self.status.setText(f"The project already uses {target}.")
+            self.set_message(self.status, "msg.already_units", target=target)
             return
         try:
             if self._pending_condition_edit():
@@ -3053,7 +3439,7 @@ class Panel(W.QDockWidget):
         self.penalty.setText(repr(new_penalty))
         self._reset_condition_editors()
         self.refresh()
-        self.status.setText(f"Converted all physical values from the previous unit system to {target}.")
+        self.set_message(self.status, "msg.units_converted", target=target)
 
     def add_material(self):
         ids = [int(self.material_table.item(r, 0).text()) for r in range(self.material_table.rowCount())]
@@ -3078,6 +3464,88 @@ class Panel(W.QDockWidget):
             key = self.geometry_rows[row]
             Gui.Selection.addSelection(self.doc.Name, self.entities[key])
 
+    # ---------------------------------------------------------------- mouse interaction
+    def _interaction_set_guidance(self, text):
+        if hasattr(self, "interaction_hint"):
+            self.interaction_hint.setText(text)
+        self._interaction_sync_toggles()
+
+    def _interaction_log(self, message):
+        if hasattr(self, "log"):
+            self.log.appendPlainText(str(message))
+        self.status.setText(str(message)[:400])
+
+    def _interaction_sync_toggles(self):
+        """Keep the audit checkbox and coupling-only button consistent with real state."""
+        interaction = self.interaction
+        if interaction is None:
+            return
+        if getattr(self, "hover_audit", None) is not None:
+            desired = bool(interaction.hover_audit)
+            if self.hover_audit.isChecked() != desired:
+                self.hover_audit.blockSignals(True)
+                self.hover_audit.setChecked(desired)
+                self.hover_audit.blockSignals(False)
+        if getattr(self, "coupling_isolate_button", None) is not None:
+            key = ("interfaces.isolate_restore" if interaction.visibility.active
+                   else "interfaces.isolate")
+            self._text(self.coupling_isolate_button, key)
+
+    def _pressure_mode(self):
+        combo = getattr(self, "load_kind", None)
+        return bool(combo is not None and combo.currentData() == "reference_pressure")
+
+    def _hover_mode_changed(self, *_args):
+        if self.interaction is not None and hasattr(self, "hover_mode"):
+            self.interaction.set_hover_mode(self.hover_mode.currentData())
+
+    def _hover_audit_toggled(self, enabled):
+        if self.interaction is not None:
+            self.guard(lambda: self.interaction.set_hover_audit(enabled))
+
+    def start_boundary_pick(self, category):
+        if self.interaction is not None:
+            self.guard(lambda: self.interaction.start_boundary(category))
+
+    def start_coupling_pick(self):
+        if self.interaction is not None:
+            self.guard(self.interaction.start_coupling)
+
+    def cancel_interaction(self):
+        if self.interaction is not None:
+            self.guard(lambda: self.interaction.cancel(reason="cancel"))
+
+    def toggle_coupling_visibility(self):
+        if self.interaction is not None:
+            self.guard(self.interaction.toggle_coupling_visibility)
+
+    def _interaction_page_changed(self, _index):
+        if self.interaction is not None:
+            self.guard(self.interaction.on_page_switch)
+
+    def hideEvent(self, event):
+        # A hidden/closed dock cannot be interacted with; the temporary callbacks and the
+        # coupling-only visibility must not survive it.
+        if self.interaction is not None:
+            self.guard(self.interaction.shutdown)
+        super().hideEvent(event)
+
+    def closeEvent(self, event):
+        if self.interaction is not None:
+            self.guard(self.interaction.shutdown)
+        super().closeEvent(event)
+
+    def _coupling_table_selection(self):
+        if self.interaction is None or not self.doc:
+            return
+        rows = sorted({index.row() for index in self.coupling_table.selectedIndexes()})
+        edge_id = None
+        if rows:
+            item = self.coupling_table.item(rows[0], 0)
+            if item is not None:
+                edge_id = int(item.text())
+        self.guard(lambda: self.interaction.on_coupling_row_selected(edge_id))
+
     def selections(self):
         result = []
         for selection in Gui.Selection.getSelectionEx():
@@ -3087,30 +3555,66 @@ class Panel(W.QDockWidget):
             kind, ident = obj.IbraKind, obj.IbraBrepId
             target = {"target_kind": kind, "target_id": ident}
             if kind == "face" and selection.SubElementNames:
-                subs = selection.SubElementNames
-                if len(subs) != 1:
-                    raise ValueError("Assign subedges or vertices of a patch individually, or select independent boundary entities in the geometry table.")
-                sub = obj.Shape.getElement(subs[0])
-                if subs[0].startswith("Vertex"):
-                    face = next(f for f in self.index["faces"] if f["id"] == ident)
-                    matches = [side for side, xyz in face["corners"].items() if (sub.Point-App.Vector(*xyz)).Length < 1e-6]
-                    if len(matches) != 1:
-                        raise ValueError("The vertex does not uniquely match a natural NURBS corner. Strong enforcement at general trimming vertices is not supported.")
-                    target["side"] = matches[0]
-                elif subs[0].startswith("Edge"):
-                    matches = []
-                    for edge in self.index["edges"]:
-                        if edge["kind"] != "edge" or edge["face_ids"] != [ident]:
-                            continue
-                        points = edge["points"]
-                        if all(sub.distToShape(Part.Vertex(App.Vector(*p)))[0] < 1e-5 for p in points) and abs(sub.Length-sum((App.Vector(*b)-App.Vector(*a)).Length for a, b in zip(points, points[1:]))) < max(1e-4, sub.Length*.01):
-                            matches.append(edge["id"])
-                    if len(matches) != 1:
-                        raise ValueError("Boundary matching is ambiguous. Select the boundary by its B-rep ID in the geometry table.")
-                    target = {"target_kind": "edge", "target_id": matches[0]}
+                target = self._match_face_subelement(obj.Name, ident,
+                                                     tuple(selection.SubElementNames))
             if target not in result:
                 result.append(target)
         return result
+
+    def _match_face_subelement(self, object_name, face_id, sub_names):
+        """Resolve one sub-element of a registered patch face to a boundary target.
+
+        Shared by :meth:`selections` (the existing capture contract) and the mouse
+        interaction resolver, so both use one unambiguous mapping. A whole-face
+        sub-element (``Face1``, which is what ``getObjectInfo`` returns for a
+        single-face Part::Feature) stays the whole patch; an ``EdgeN`` maps to the
+        registered one-sided boundary only when it matches uniquely; an ambiguous or
+        unknown sub-element is refused instead of silently becoming the whole face.
+        """
+        obj = self.doc.getObject(object_name) if self.doc is not None else None
+        if obj is None:
+            raise ValueError(f"The patch object {object_name!r} is no longer in the document.")
+        if len(sub_names) != 1:
+            raise ValueError("Assign subedges or vertices of a patch individually, or select "
+                             "independent boundary entities in the geometry table.")
+        sub_name = sub_names[0]
+        sub = obj.Shape.getElement(sub_name)
+        if sub_name.startswith("Vertex"):
+            face = next(f for f in self.index["faces"] if f["id"] == face_id)
+            matches = [side for side, xyz in face["corners"].items()
+                       if (sub.Point-App.Vector(*xyz)).Length < 1e-6]
+            if len(matches) != 1:
+                raise ValueError("The vertex does not uniquely match a natural NURBS corner. "
+                                 "Strong enforcement at general trimming vertices is not supported.")
+            return {"target_kind": "face", "target_id": face_id, "side": matches[0]}
+        if sub_name.startswith("Edge"):
+            matches = []
+            for edge in self.index["edges"]:
+                face_ids = [int(value) for value in edge.get("face_ids", [])]
+                if edge.get("kind") == "edge":
+                    if face_ids != [face_id]:
+                        continue
+                elif edge.get("kind") == "coupling":
+                    if face_id not in face_ids:
+                        continue
+                else:
+                    continue
+                points = edge["points"]
+                if all(sub.distToShape(Part.Vertex(App.Vector(*p)))[0] < 1e-5 for p in points) and \
+                        abs(sub.Length-sum((App.Vector(*b)-App.Vector(*a)).Length
+                                           for a, b in zip(points, points[1:]))) < \
+                        max(1e-4, sub.Length*.01):
+                    matches.append((edge["kind"], int(edge["id"])))
+            matches = sorted(set(matches))
+            if len(matches) != 1:
+                # Never silently fall back to the whole patch and never invent a kind:
+                # tell the user to pick the standalone edge object instead.
+                raise ValueError(self.tr("msg.pick_read_failed"))
+            kind, ident = matches[0]
+            return {"target_kind": kind, "target_id": ident}
+        # ``Face1`` (or any other part of this single patch object) is the whole patch;
+        # this preserves the original ``selections()`` behaviour for a picked face.
+        return {"target_kind": "face", "target_id": face_id}
 
     def capture(self, category):
         def operation():
@@ -3123,7 +3627,10 @@ class Panel(W.QDockWidget):
             if category == "initial_conditions" and any(t["target_kind"] != "face" for t in targets):
                 raise ValueError("Select a patch for initial conditions.")
             setattr(self, category+"_targets", targets)
-            getattr(self, category+"_target").setText("; ".join(f"{t['target_kind']} {t['target_id']}"+(" · corner "+t["side"] if "side" in t else "") for t in targets))
+            getattr(self, category+"_target").setText("; ".join(
+                f"{t['target_kind']} {t['target_id']}"
+                + (self.tr("msg.corner_suffix", side=t["side"]) if "side" in t else "")
+                for t in targets))
             if category == "supports" and len(targets) == 1 and "side" in targets[0]:
                 self.support_side.setCurrentIndex(self.support_side.findData(targets[0]["side"]))
         self.guard(operation)
@@ -3155,7 +3662,7 @@ class Panel(W.QDockWidget):
                 base.update({"variable": self.initial_variable.currentText(), "value": self.initial_vector.get()})
             if category != "initial_conditions":
                 a, b = getattr(self, category+"_interval")
-                base["interval"] = [float(a.text()), "End" if b.text().strip() == "End" else float(b.text())]
+                base["interval"] = [float(a.text()), "End" if b.text().strip() in ("End", i18n.translate("conditions.end", "zh"), i18n.translate("conditions.end", "en")) else float(b.text())]
             if group_id is not None:
                 if category == "initial_conditions":
                     raise ValueError("Named groups are not supported for initial fields.")
@@ -3205,20 +3712,22 @@ class Panel(W.QDockWidget):
             # The selection is committed; clear it so it cannot block a later unit conversion.
             self._clear_condition_selection(category)
             self.refresh_conditions(category)
-            self.status.setText("Condition recorded | Geometric and formulation compatibility will be validated before export.")
+            self.set_message(self.status, "conditions.confirmed")
         self.guard(operation)
 
     def _condition_label(self, record):
         if "group_id" in record:
             group = next((g for g in self.project.get("groups", []) if g.get("id") == record["group_id"]), None)
             if group is None:
-                return f"group {record['group_id']} (missing)"
+                return self.tr("conditions.group_missing", group=record['group_id'])
             expanded = expand_groups([group], self.index).get(group["id"], {})
             missing = expanded.get("missing") or []
-            return (f"group {group['id']} \"{group.get('name')}\" → {len(expanded.get('members', []))} members"
-                    + (f" (missing {missing})" if missing else ""))
+            text = self.tr("conditions.group_label", group=group['id'],
+                           name=group.get('name'), count=len(expanded.get('members', [])))
+            return text + (self.tr("conditions.group_members_missing", missing=missing)
+                           if missing else "")
         return f"{record.get('target_kind')} {record.get('target_id')}" + \
-            (f" · corner {record['side']}" if record.get("side") else "")
+            (self.tr("msg.corner_suffix", side=record['side']) if record.get("side") else "")
 
     def _condition_kind_label(self, record):
         if record.get("kind") == "reference_pressure":
@@ -3228,10 +3737,10 @@ class Panel(W.QDockWidget):
     def _condition_value_label(self, record):
         amplitude = record.get("amplitude")
         points = amplitude.get("points") if isinstance(amplitude, dict) else None
-        table = f" · table {len(points)} pts" if points else ""
+        table = (self.tr("conditions.table_points", count=len(points)) if points else "")
         if record.get("kind") == "reference_pressure":
             return (f"p={record.get('pressure')} · flip={bool(record.get('normal_flip'))}"
-                    f"{table or ' · constant 1'}")
+                    f"{table or self.tr('conditions.constant_one')}")
         return f"{record.get('value')}{table}"
 
     def refresh_conditions(self, category):
@@ -3239,7 +3748,7 @@ class Panel(W.QDockWidget):
         items = getattr(self, category+"_list")
         items.clear()
         for r in self.project[category]:
-            pending = " · PENDING REBIND" if r.get("needs_rebind") else ""
+            pending = self.tr("conditions.pending_rebind_suffix") if r.get("needs_rebind") else ""
             items.addItem(f"{r['name']}  ·  {self._condition_label(r)}  ·  "
                           f"{self._condition_kind_label(r)}  {self._condition_value_label(r)}{pending}")
 
@@ -3352,7 +3861,7 @@ class Panel(W.QDockWidget):
         except Exception as exc:  # noqa: BLE001 - surfaced in the status line
             if strict:
                 raise ValueError(f"Document association failed: {exc}") from exc
-            self.status.setText(f"Document association failed: {exc}")
+            self.set_message(self.status, "msg.doc_association_failed", error=exc)
             return False
         hook = doc_owner.installed_hook(self.doc)
         if hook is None:
@@ -3372,6 +3881,9 @@ class Panel(W.QDockWidget):
         """
         if self._pending_condition_edit():
             raise ValueError("Commit or cancel the open condition edit before switching documents.")
+        if self.interaction is not None:
+            self.interaction.reset_silently()
+            self._interaction_sync_toggles()
         self.clear_preview(doc)
         # Switching the panel onto another document drops the previous result display and
         # restores the CAD visibility it had changed.
@@ -3466,15 +3978,16 @@ class Panel(W.QDockWidget):
             if doc.FileName:
                 doc.save()
             else:
-                path, _ = W.QFileDialog.getSaveFileName(self, "Save FreeCAD Document",
+                path, _ = W.QFileDialog.getSaveFileName(self, self.tr("dialog.save_document"),
                                                         str(self.work_dir/"ibra.FCStd"),
                                                         "FreeCAD Document (*.FCStd)")
                 if not path:
                     return
                 doc.saveAs(path)
             state = doc_owner.read(doc)
-            self.status.setText("Project written into the FreeCAD document."
-                                + (f" Sync error: {state.sync_error}" if state.sync_error else ""))
+            self.set_message(self.status, "msg.project_written_sync",
+                             error=self.tr("msg.sync_error", error=state.sync_error)
+                             if state.sync_error else "")
         self.guard(operation)
 
     def _mark_all_pending(self, project, reason):
@@ -3530,9 +4043,8 @@ class Panel(W.QDockWidget):
                 self._reset_panel_context(doc, cache, index, staged_project, state.entity_map)
                 self.refresh()
                 self.attach_to_document()
-                self.status.setText("Document restored from its saved cache; existing objects, groups and the "
-                                    "entity association were reused."
-                                    + (" Some bindings are pending rebind." if diagnostics else ""))
+                self.set_message(self.status, "restore.cache_reused",
+                                 pending=self.tr("restore.pending_suffix") if diagnostics else "")
                 return
             staged_project = deepcopy(state.project)
             if diagnostics:
@@ -3540,8 +4052,7 @@ class Panel(W.QDockWidget):
             # Rebuild mode: keep the current context until the import callback succeeds.
             self.reuse_target_document = doc
             self.pending_project = staged_project
-            self.status.setText("Restoring in rebuild mode; the intended document is reused and modified shapes "
-                                "are never overwritten.")
+            self.set_message(self.status, "restore.rebuild_mode")
             self.start_import(state.source_step)
         self.guard(operation)
 
@@ -3550,13 +4061,14 @@ class Panel(W.QDockWidget):
             self.sync()
             errors, warnings = validate(self.project, self.index)
             self.log.appendPlainText("\n".join(["Error: "+e for e in errors]+["Notice: "+w for w in warnings]))
-            self.status.setText(f"Errors: {len(errors)} | Notices: {len(warnings)}")
+            self.set_message(self.status, "msg.validation_summary",
+                             errors=len(errors), notices=len(warnings))
             # The static-validation evidence is the actual result of this validate() run.
             self.result_state.validate_result = not errors
             self._refresh_result_evidence()
             if errors:
                 self.log.show()
-                self.log_toggle.setText("Hide Log")
+                self._text(self.log_toggle, "log.hide")
             return not errors
         return self.guard(operation)
 
@@ -3565,10 +4077,10 @@ class Panel(W.QDockWidget):
             if self.process:
                 raise ValueError("A background task is already running; wait for it before saving.")
             self.sync()
-            path, _ = W.QFileDialog.getSaveFileName(self, "Save Analysis Project", str(self.work_dir/"project.ibra-project.json"), "IBRA Project (*.ibra-project.json);;Project JSON (*.json)")
+            path, _ = W.QFileDialog.getSaveFileName(self, self.tr("dialog.save_project"), str(self.work_dir/"project.ibra-project.json"), "IBRA Project (*.ibra-project.json);;Project JSON (*.json)")
             if path:
                 write_project(path, self.project)
-                self.status.setText("Project saved: "+path)
+                self.set_message(self.status, "msg.project_saved", path=path)
         self.guard(operation)
 
     def open_project(self):
@@ -3578,7 +4090,7 @@ class Panel(W.QDockWidget):
             if self.snapshot:
                 raise ValueError("A controlled snapshot is pending; apply or cancel it before opening another "
                                  "project.")
-            path, _ = W.QFileDialog.getOpenFileName(self, "Open Analysis Project", str(self.work_dir), "IBRA Project (*.ibra-project.json);;Project JSON (*.json)")
+            path, _ = W.QFileDialog.getOpenFileName(self, self.tr("dialog.open_project"), str(self.work_dir), "IBRA Project (*.ibra-project.json);;Project JSON (*.json)")
             if not path:
                 return
             self.load_project(path)
@@ -3606,19 +4118,19 @@ class Panel(W.QDockWidget):
             "pipeline_root": self.pipeline_root.text().strip(),
             "work_dir": self.work_directory.text().strip()})
         self.work_dir = Path(self.settings["work_dir"])
-        self.status.setText("Backend configuration saved.")
+        self.set_message(self.status, "msg.backend_saved")
 
     def check_backend_environment(self):
         self.save_backend_configuration()
         self.log.show()
-        self.log_toggle.setText("Hide Log")
+        self._text(self.log_toggle, "log.hide")
         self.start_process([str(BASE/"backend/check_environment.py")],
-                           lambda: self.status.setText("Backend environment verified."))
+                           lambda: self.set_message(self.status, "msg.backend_verified"))
 
     def export_case(self):
         if not self.check_project():
             return
-        folder = W.QFileDialog.getExistingDirectory(self, "Select Parent Directory for a New Analysis Model", str(Path.home()))
+        folder = W.QFileDialog.getExistingDirectory(self, self.tr("dialog.export_parent"), str(Path.home()))
         if not folder:
             return
         destination = Path(folder)/("ibra_case_"+uuid.uuid4().hex[:8])
@@ -3630,17 +4142,17 @@ class Panel(W.QDockWidget):
             self.last_run = None
             self.clear_result_display(full=True)
             self.refresh_result_run_dirs()
-            self.status.setText("Analysis model exported: "+str(destination))
+            self.set_message(self.status, "msg.exported", path=destination)
         self.guard(lambda: self.start_worker({"action": "export", "cache_dir": str(self.cache), "project_file": str(project_file), "destination": str(destination)}, done))
 
     def export_geometry(self):
         def operation():
             if not self.cache:
                 raise ValueError("Import STEP geometry first.")
-            path, _ = W.QFileDialog.getSaveFileName(self, "Export Source CAD Geometry (mm)", str(Path.home()/"geometry.cad.json"), "CAD JSON (*.cad.json)")
+            path, _ = W.QFileDialog.getSaveFileName(self, self.tr("dialog.export_geometry"), str(Path.home()/"geometry.cad.json"), "CAD JSON (*.cad.json)")
             if path:
                 write_json(path, read_json(self.cache/"geometry.cad.json"))
-                self.status.setText("CAD geometry exported (mm; analysis settings excluded): "+path)
+                self.set_message(self.status, "msg.geometry_exported", path=path)
         self.guard(operation)
 
     def run_case(self, check):
@@ -3661,9 +4173,10 @@ class Panel(W.QDockWidget):
             self.refresh_result_run_dirs()
             arguments = [str(created["run_dir"]/"MainKratos.py")]+(["--check"] if check else [])
             def done():
-                self.status.setText(("Model initialization completed: " if check else
-                                     "Analysis completed: ")+f"{created['run_id']} · "
-                                     f"{created['run_dir']}")
+                self.set_message(
+                    self.status,
+                    "msg.init_done" if check else "msg.analysis_done",
+                    run_id=created['run_id'], run_dir=created['run_dir'])
             self.start_process(arguments, done,
                                completion=self._refresh_run_report_and_results)
         self.guard(operation)
@@ -3677,6 +4190,13 @@ def show_panel():
     _panel.show()
     _panel.raise_()
     return _panel
+
+
+def shutdown_interaction():
+    """Remove every temporary mouse callback and restore visibility on workbench exit."""
+    panel = _panel
+    if panel is not None and getattr(panel, "interaction", None) is not None:
+        panel.interaction.shutdown()
 
 
 class OpenCommand:
