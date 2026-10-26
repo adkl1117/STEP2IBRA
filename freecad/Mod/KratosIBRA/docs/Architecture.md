@@ -1,6 +1,6 @@
 # Architecture and input contracts
 
-The GUI is a Python FreeCAD workbench registered through `InitGui.py` and `package.xml`. Its dock uses FreeCAD's own PySide bindings and Part geometry. It does not import OCP or Kratos binaries into the FreeCAD process.
+The GUI is a Python FreeCAD workbench registered through `InitGui.py`. Its dock uses FreeCAD's own PySide bindings and Part geometry. It does not import OCP or Kratos binaries into the FreeCAD process.
 
 ```text
 FreeCAD Part / PySide

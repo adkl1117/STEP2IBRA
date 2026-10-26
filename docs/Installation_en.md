@@ -1,14 +1,14 @@
-# STEP2IBRA V0.5 Preview — Installation
+# STEP2IBRA V0.5 Preview: installation guide
 
 [中文版](V0_5_INSTALLATION_zh.md) · [Release notes and usage](V0_5_RELEASE_NOTES_en.md)
 
-## Requirements and download
+## 1. Software requirements and distribution
 
-The verified platform is Windows x64, FreeCAD 1.1.3 and a separate 64-bit Python 3.11 with `venv` and `pip`. FreeCAD, Python, OCP and Kratos binaries are not included. Other platforms have not been validated.
+The validated configuration is Windows x64, FreeCAD 1.1.3 and a separate 64-bit Python 3.11 environment with `venv` and `pip`. The distribution contains the workbench and STEP conversion source. FreeCAD, Python, OCP and Kratos binaries require separate installation. Compatibility with other platforms has not been established.
 
-Download **STEP2IBRA-V0.5preview-20260927.zip** from the [V0.5 Preview release](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview). Extract it to a stable writable directory. Open PowerShell in the extracted `STEP2IBRA-V0.5preview` directory, containing `requirements-backend.txt` and `scripts`. Do not install backend packages into FreeCAD's embedded Python.
+Download **STEP2IBRA-V0.5preview-20260927.zip** from the [V0.5 Preview release](https://github.com/adkl1117/STEP2IBRA/releases/tag/V0.5preview) and extract it to a stable, writable location. Open PowerShell in the extracted `STEP2IBRA-V0.5preview` directory, which contains `requirements-backend.txt` and `scripts`. Install backend dependencies in the separate Python environment; FreeCAD uses its own embedded Python for the graphical workbench.
 
-## Prepare the backend
+## 2. Backend environment
 
 ```powershell
 py -3.11 -m venv .venv
@@ -16,11 +16,13 @@ py -3.11 -m venv .venv
 & '.\.venv\Scripts\python.exe' freecad/Mod/KratosIBRA/backend/check_environment.py
 ```
 
-The environment check must succeed with `"passed": true`. Keep this environment at its configured location. The requirements include Kratos IGA, Structural Mechanics and Linear Solvers applications, OCP, NumPy and h5py. No Kratos source build is needed. Internet access is required for the package downloads. Use the absolute Python 3.11 executable path if `py` is unavailable; environment activation is unnecessary.
+The check must report `"passed": true`. The requirements specify the Kratos IGA, Structural Mechanics and Linear Solvers applications, OCP, NumPy and h5py. Package installation requires internet access; a Kratos source build is unnecessary for this configuration. If `py` is unavailable, substitute the absolute path to a Python 3.11 executable. The commands invoke the environment directly, so activation is unnecessary.
 
-## Install into an independent preview profile
+Keep the virtual environment at its configured location. The installer records its executable path.
 
-Close FreeCAD. To keep V0.2 installed, use a dedicated V0.5 profile rather than the existing user directory. Run the following from the extracted directory:
+## 3. Installation in a separate FreeCAD profile
+
+Close FreeCAD before installation. A dedicated V0.5 user directory allows an existing V0.2 installation and its settings to be retained. Run these commands from the extracted package directory:
 
 ```powershell
 $previewProfile = Join-Path (Get-Location) 'profile-v05'
@@ -31,25 +33,31 @@ $env:FREECAD_USER_HOME = $previewProfile
 & 'C:\Program Files\FreeCAD 1.1\bin\FreeCAD.exe' -u "$previewProfile\user.cfg" -s "$previewProfile\system.cfg"
 ```
 
-Repeat the last three lines (profile variable, environment variable and FreeCAD launch) in a new PowerShell session to enter this profile again. `FREECAD_USER_HOME` applies to that shell and its child processes. The explicit `-u` and `-s` arguments keep preview settings separate. FreeCAD may also discover workbenches installed in its program directory: do not install another KratosIBRA/KratosIGA copy there. In the FreeCAD Python console, check `FreeCAD.getUserAppDataDir()` and `kratos_iga.__file__` after activating the workbench; they should identify the preview profile.
+For subsequent launches, open PowerShell in the same extracted directory, set `$previewProfile` and `FREECAD_USER_HOME` again, and execute the FreeCAD launch command. The environment variable applies to that shell and its child processes. The `-u` and `-s` arguments select the profile's user and system configuration files.
 
-Alternatively, obtain your normal user directory with `print(FreeCAD.getUserAppDataDir())` in FreeCAD's Python console, close FreeCAD, then pass that exact directory to the installer. The installer refuses to overwrite an existing `Mod/KratosIBRA`. Back up an older plugin outside every active `Mod` directory before upgrading; retain projects and results. Do not replace the V0.2 installation if you want both versions available.
+FreeCAD can also discover workbenches in its program directory. Check for another KratosIBRA/KratosIGA installation there if an unexpected version appears. After activating the workbench, inspect `FreeCAD.getUserAppDataDir()` and `kratos_iga.__file__` in the FreeCAD Python console. Both paths should correspond to the intended preview profile.
 
-## Start and verify
+To install in an existing user profile, first obtain its exact path with `print(FreeCAD.getUserAppDataDir())`, then close FreeCAD and pass that path to the installer. The installer preserves an existing `Mod/KratosIBRA` by refusing to overwrite it. Before an upgrade, back up the previous plugin outside all active `Mod` directories and retain its projects and results. Use separate profiles when both V0.2 and V0.5 are required.
+
+## 4. Configuration and initial verification
 
 1. Select **IBRA Preprocessor for Kratos** in FreeCAD.
-2. Choose **English** or **中文** at the top of the plugin panel.
-3. Open **Output → Analysis and Output** and select **Check Backend Environment**. If needed, review Backend Python Executable, Conversion Pipeline Directory and Working Directory, then save the backend configuration.
-4. Open `freecad/Mod/KratosIBRA/examples/two_patch/two_patch_shell.ibra-project.json` from the extracted package, or the corresponding file under the installed `Mod/KratosIBRA/examples` directory.
-5. Follow the [release notes and usage instructions](V0_5_RELEASE_NOTES_en.md) for geometry inspection, mouse picking, export, initialization, solution and native VTKHDF result display.
+2. Select **English** or **中文** at the top of the plugin panel.
+3. In **Output → Analysis and Output**, run **Check Backend Environment**. Review Backend Python Executable, Conversion Pipeline Directory and Working Directory if the check fails, then save the corrected backend configuration.
+4. Open `freecad/Mod/KratosIBRA/examples/two_patch/two_patch_shell.ibra-project.json` from the extracted package, or the corresponding file in the installed `Mod/KratosIBRA/examples` directory.
+5. Follow the [usage guide](V0_5_RELEASE_NOTES_en.md) to inspect the model, assign conditions, export, initialize and solve it, and display native VTKHDF results.
 
-The installer copies the entire workbench and writes profile-specific `backend_config.json`. Existing `profile-v05/IBRA/backend.json` overrides take precedence: review them if reusing a profile. Moving the download requires recreating the virtual environment and updating the backend executable path. Keep each project together with its relative STEP/profile files.
+The installer copies the complete workbench and writes a profile-specific `backend_config.json`. Existing user settings in `profile-v05/IBRA/backend.json` take precedence over those defaults; review them when reusing a profile.
 
-## Troubleshooting and removal
+If the extracted distribution is moved, recreate the virtual environment and update the backend executable path. Keep project files together with their relatively referenced STEP and conversion-profile files.
 
-- Missing workbench or old UI: check the selected user directory, `Mod/KratosIBRA/InitGui.py` and `kratos_iga.__file__`; remove duplicate modules from active search directories after backing them up.
-- Missing backend application: rerun the environment check with the separate environment's Python and install every requirement.
-- Geometry-change warning: reimport and review/rebind assignments; do not bypass invalidation protection.
-- Failed solve: inspect the run report and backend logs, constraints, units, section thickness and interface decisions. Successful initialization alone is not a successful analysis.
+## 5. Diagnosis and removal
 
-To remove the preview, close FreeCAD and remove only its `profile-v05/Mod/KratosIBRA` directory. Preserve projects and `IBRA-work` results. V0.2's Git tag and original branch are independent of this installation.
+| Observation | Check |
+| --- | --- |
+| Workbench missing or an earlier interface appears | Verify the selected profile, `Mod/KratosIBRA/InitGui.py` and `kratos_iga.__file__`. Back up duplicate modules before moving them out of active search directories. |
+| Backend application missing | Run the environment check with the separate environment's Python and install all listed requirements. |
+| Geometry-change warning | Reimport the geometry, review the assignments and complete the required rebinding. Retain the invalidation protection. |
+| Analysis fails | Inspect the run report and backend log, then check constraints, units, thickness and interface decisions. Initialization and solution are separate verification stages. |
+
+To remove V0.5, close FreeCAD and remove only `profile-v05/Mod/KratosIBRA`. Retain project files and `IBRA-work` results. This local removal does not affect the V0.2 Git tag or its original branch.

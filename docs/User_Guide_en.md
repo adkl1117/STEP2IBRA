@@ -1,138 +1,162 @@
-# IBRA Preprocessor for Kratos — User Guide
+# STEP2IBRA V0.5 Preview: release notes and user guide
 
-Version 0.5.0.
+Version: 0.5.0 · Release date: 2026-09-27 · Workbench: **IBRA Preprocessor for Kratos**
 
-This native FreeCAD workbench supports preprocessing for **isogeometric B-rep analysis (IBRA)**: import exact CAD geometry, assign constitutive properties and discretization parameters, prescribe boundary and initial conditions, and export structural analysis models for Kratos. The interface uses terminology from computational structural mechanics and the finite element method.
+[中文版](V0_5_RELEASE_NOTES_zh.md) · [Installation guide](V0_5_INSTALLATION_en.md)
 
-## 1. Installation and startup
+## 1. Purpose and scope
 
-Start with the [installation guide](Installation_en.md). It covers a separate Python 3.11 environment, dependency verification and installation into the FreeCAD user module directory. This distribution includes the STEP conversion source and does not require a previous project.
+STEP2IBRA provides a FreeCAD workbench for isogeometric B-rep analysis (IBRA) of surface shells and membranes with Kratos. The workflow retains STEP surface geometry and trimming information while specifying materials, sections, the analysis domain, boundary and initial conditions, and patch-interface decisions.
 
-After installation, restart FreeCAD and select **IBRA Preprocessor for Kratos**. In Output, use **Check Backend Environment**. The Geometry page includes **Open Cantilever Example**, which loads a configured model from the installed workbench.
+V0.5 introduces explicit unit conversion, interface decision states, named groups and document association, preprocessing inspection, reference-normal pressure with time amplitudes, and displacement visualization from native Kratos output. Guided mouse selection, coupling-edge isolation and selectable English/Chinese text support model preparation. Geometric interface detection identifies candidates; the user determines their mechanical role.
 
-The dock can be resized, detached and scrolled. Numbered navigation covers Geometry, Materials, Boundary, Initial, Interfaces and Output. Boundary contains Support and Loads tabs. The checkbox after Refinement in Geometry enables refinement and expands its settings; clearing it disables refinement and hides the settings. Validation, export and cancellation remain at the bottom. Backend configuration persists under the FreeCAD user directory in `IBRA/backend.json`; generated data use `IBRA-work` by default. Save path changes using **Save Backend Configuration**.
+## 2. Startup, projects and interface language
 
-## 2. Geometry import and entity assignment
+Install the distribution using the [installation guide](V0_5_INSTALLATION_en.md), then select **IBRA Preprocessor for Kratos** in FreeCAD. Use **Open Project** at the top of the panel. Backend configuration and status are in **Output → Analysis and Output**.
 
-1. Select **Import STEP** and choose a `.stp` or `.step` file.
-2. If required, use **Select Conversion Profile** before importing. An empty default profile is provided in `examples/profiles/default.json` inside the installed workbench. Model-specific exclusions must be reviewed for each input.
-3. Wait for conversion. The table lists surface patches, one-sided boundaries and candidate interfaces with their B-rep IDs.
-4. Select patches or boundaries in the table or viewport. Hold Ctrl to select multiple independent entities.
-5. Navigate to a condition page, select **Assign Selected Entities**, enter the parameters and select **Add / Update**.
+For an initial session, open `freecad/Mod/KratosIBRA/examples/two_patch/two_patch_shell.ibra-project.json`. Paths in this guide are relative to the extracted package. The installer also copies the examples into `Mod/KratosIBRA/examples`.
 
-Patches are displayed with their original B-rep geometry. Independent boundaries use sampled polylines for selection; exported analysis geometry retains the exact NURBS surfaces and trimming p-curves. Orange curves indicate candidate interfaces. Geometric coincidence alone does not establish the intended structural connection.
+Select **English** or **中文** using **Interface language**. Buttons, navigation, fields, tooltips, hover information and selection instructions update immediately, and the preference persists for subsequent launches. Switching preserves the model, condition drafts, targets and active picking stage. It leaves FreeCAD's global language, technical variables, paths, IDs and user-defined names unchanged. Backend logs and numerical diagnostics retain their source text.
 
-Changing a display object's shape or placement invalidates export. Save modified CAD geometry as STEP, reimport it and review the condition assignments.
+## 3. Geometry and entity identification
 
-## 3. Constitutive properties and units
+Use **Import STEP** for a new `.stp` or `.step` input. Model-specific conversion profiles and exclusions require review for the input geometry. The displayed patches retain their B-rep shape; sampled boundary polylines support selection while exported analysis geometry retains NURBS surfaces and trimming p-curves.
 
-The Materials page provides unique ID, name, Young's modulus, Poisson's ratio, density and thickness. The current constitutive law is isotropic linear elasticity under plane stress. Use its Patch Assignments table to assign materials, element formulations and quadrature settings even when refinement is disabled.
+The **Hover audit** selector in **Geometry** distinguishes these entities:
 
-Young's modulus, density and thickness must be finite and positive. Poisson's ratio must lie strictly between −1 and 0.5. Material IDs must be unique.
-
-OCCT imports STEP coordinates in millimetres.
-
-| Unit system | Geometry export | Young's modulus | Density | Thickness | Line load | Surface load |
-| --- | --- | --- | --- | --- | --- | --- |
-| `mm-N-s` | Preserve millimetres | N/mm² | tonne/mm³ | mm | N/mm | N/mm² |
-| `m-N-s` | Multiply physical coordinates by 0.001 | Pa | kg/m³ | m | N/m | N/m² |
-
-Default steel density is `7.85e-9` tonne/mm³. Changing units scales geometry during complete-model export; it does **not** convert material properties, thicknesses, prescribed displacements or loads. Enter dimensionally consistent data. CAD-only export preserves millimetres.
-
-## 4. Element formulation and discretization
-
-Each imported analysis patch requires exactly one material and element-formulation assignment.
-
-New projects have refinement disabled. Check Refinement in Geometry to enable degree elevation and knot insertion. When disabled, export preserves the original degrees and control points and omits RefinementModeler. Stored refinement settings are retained for re-enabling, and the switch is saved with the project. Legacy projects without the switch retain their original refinement behavior. If the original degrees are insufficient for the chosen formulation, validation blocks export and requests refinement instead of silently elevating the geometry.
-
-| Setting | Interpretation |
+| Mode | Information |
 | --- | --- |
-| Kirchhoff–Love Shell | Minimum degree 2 and internal basis continuity of at least C¹ |
-| Membrane | Minimum degree 1; membrane action without shell bending stiffness |
-| `p`, `q` | Target polynomial degrees, at least the source degrees and no greater than 8 |
-| `h-u`, `h-v` | Knot insertions per existing span, from 0 to 100 |
-| `GP` | Quadrature points per span; 0 preserves defaults, explicit values range from 1 to 20 |
+| Edge / Patch / Coupling (all) | Registered entity type and ID |
+| Edge (one-sided boundary) | Ordinary boundary Edge ID |
+| Patch (surface) | Surface Patch ID |
+| Coupling (interface edge) | Candidate-interface Coupling ID |
 
-For batch assignment, select rows or use **Select All**, specify material, formulation, minimum target degree and knot insertions, then select **Apply to Selected Patches**. Higher source degrees are preserved.
+These IDs refer to the current project's geometry mapping. FreeCAD `FaceN` / `EdgeN` identifiers cannot be substituted for them.
 
-Refinement means knot insertion and degree elevation in the spline approximation space, not a triangular or tetrahedral element size. Degree elevation preserves continuity at existing knots: an internal C⁰ knot remains C⁰. The shell formulation may require valid reparameterization or removal of redundant knots. Select a membrane only when neglecting bending is physically appropriate.
+In **Interfaces**, **Coupling edges only** temporarily isolates coupling edges. Select it again to restore the previous visibility. Selecting an interface-table row highlights its edge and can temporarily reveal a hidden interface. Visibility changes do not alter the analysis domain or interface decisions.
 
-## 5. Essential boundary conditions
+Changes to CAD geometry invalidate existing bindings. Review the indicated geometry checks and rebinding before further export.
 
-Boundary → Support provides strong and penalty enforcement of prescribed displacements.
+## 4. Assigning supports, loads and initial fields
 
-**Strong enforcement:** select displacement components and enter prescribed values. Unchecked components remain unconstrained by that condition. For a patch, Parametric Location selects a natural boundary, a natural corner or all control points. For a one-sided edge, the preprocessor verifies that the entire curve represents a complete natural parametric boundary.
+1. In **Boundary / Initial**, open the relevant condition editor.
+2. Select **Start physics picking (left select / middle confirm)**.
+3. Left-click valid geometry in the 3D view and follow the instructions for additional targets.
+4. Middle-click in the view to confirm the geometry and populate the editor.
+5. Enter the condition parameters and select **Add / Update** to save the record.
 
-**Clamp Adjacent Control-Point Row:** additionally constrains the neighbouring control-point row with the same components and values. This is the supported shell-clamping construction; it does not introduce independent rotational degrees of freedom. It requires a complete natural parametric boundary and is unavailable for isolated corners or all-control-point selections.
+Initial fields and reference-normal pressure target surfaces. A Coupling edge cannot serve as an ordinary boundary-condition edge. The workflow rejects entities from another document, result and preprocessing-display objects, and stale or ambiguous mappings.
 
-**Penalty enforcement:** requires a one-sided boundary curve and supports general trimming curves. The current penalty support constrains all three displacement components throughout the analysis interval. The interface selects XYZ, locks the interval and disables adjacent-row clamping. Use a positive penalty factor and assess constraint accuracy and numerical conditioning.
+**New** clears the current draft; **Remove** deletes the selected record. **Esc** or the cancel button ends picking. Switching pages or condition subpages, closing the panel or document, reimporting geometry, or leaving the workbench clears temporary interaction and restores temporary visibility. Outside active picking, the middle button retains its normal navigation function.
 
-Natural boundaries and corners identify control-net locations, not arbitrary parametric-coordinate interpolation. A CAD vertex is accepted for strong enforcement only if it uniquely matches a natural NURBS corner. General trimming-vertex point supports are not implemented.
+## 5. Interface decisions and coupling
 
-## 6. Loads and initial fields
+1. In **Interfaces**, select **Start interface picking**.
+2. Left-click the first candidate coupling surface.
+3. Follow **Left-click the other candidate coupling face** and choose a surface with an existing candidate interface to the first.
+4. Left-click the corresponding coupling edge. If several interfaces connect the surfaces, select the intended edge.
+5. Follow **Middle-click the coupling edge again to confirm the target** on that same edge.
+6. Set the connection type, penalty parameters and relevant options, then select **Confirm Selected Interface**. Use **Exclude Selected Interface** to exclude the candidate or **Reset to Candidate** to return it to a pending decision.
 
-Boundary → Loads supports constant vectors and active time intervals:
+Picking configures an existing candidate; it does not generate a new interface between arbitrary surfaces. Shared topology and spatial proximity require interpretation in the structural model.
 
-- `LINE_LOAD`: select a one-sided boundary and specify force per unit length.
-- `SURFACE_LOAD`: select a patch and specify force per unit area.
-- `DEAD_LOAD`: integrated over the selected geometric measure; interpret units consistently with the target dimension.
+Displacement coupling constrains relative translation across an interface. Shell bending continuity can also require rotational coupling, for which both participating patches must use shell formulations. Assess penalty parameters through constraint-accuracy, conditioning and convergence checks appropriate to the model.
 
-The active interval must lie within the analysis interval. `End` denotes analysis end time. Loads are explicitly zero outside their active interval. Arbitrary spatial expressions and time histories are outside the current scope.
+## 6. Materials, units and analysis domain
 
-Initial displacement, velocity and acceleration are assigned to all control points of a patch once during initialization, without fixing degrees of freedom. Velocity and acceleration require dynamic analysis. Nonzero initial displacement requires nonlinear analysis.
+In **Materials**, enter Young's modulus, Poisson's ratio and density, define section thickness, and assign materials and sections in **Patch Assignments**. Every participating surface requires valid assignments. Young's modulus, density and thickness must be finite and positive; Poisson's ratio must be strictly between −1 and 0.5. Material IDs must be unique.
 
-Double-click a recorded condition to edit it. **New** exits the edit mode; **Remove** deletes the selected record. Submit form edits with **Add / Update** before saving the project.
+| Unit system | Young's modulus | Density | Thickness | Line load | Surface load or pressure |
+| --- | --- | --- | --- | --- | --- |
+| mm-N-s | N/mm² | tonne/mm³ | mm | N/mm | N/mm² |
+| m-N-s | Pa | kg/m³ | m | N/m | N/m² |
 
-## 7. Patch interfaces
+FreeCAD stores CAD lengths in millimetres. The unit selector specifies the target analysis system; **Convert Values to Selected Unit System** converts existing values. Submit a draft using **Add / Update**, or discard it using **New**, before conversion. Automatic conversion can refuse a shared penalty parameter involving rotational coupling; follow the diagnostic for that case. Amplitude and time-table values remain unchanged.
 
-The Interfaces page identifies adjacent patches and provides activation, penalty factor and rotational-continuity settings. Displacement-only coupling does not enforce complete shell bending continuity. Enable rotational coupling where required by the intended connection. Both patches must use the shell formulation for rotational coupling.
+The patch-assignment table controls participation in the analysis domain independently of display visibility. At least one valid surface must remain active. Validation rejects conditions whose targets lie outside that domain.
 
-Review detected interfaces against the physical structure. The penalty factor is not a universal material parameter; verify its influence on both solution accuracy and conditioning.
+In **Groups**, create face or edge sets for supported condition types. A condition cannot mix a group target with direct geometry targets, and missing group members block export. Initial fields currently use direct face targets. Named groups and document association depend on explicit mappings that require review after CAD changes.
 
-## 8. Validation, export and solution
+## 7. Discretization and conditions
 
-1. In Analysis and Output, select **Static** or **Implicit Dynamic**, and **Linear** or **Nonlinear**.
-2. Specify start time, end time and a positive time increment no greater than the analysis duration.
-3. Enable displacement output if required. Visualization subdivision ranges from 1 to 100 and is independent of analysis refinement.
-4. Select **Validate Model** and inspect errors and notices. Correct errors before export.
-5. Select **Export Analysis Model** and choose a parent directory. A unique `ibra_case_*` subdirectory preserves existing models.
-6. Use **Initialize Exported Model**, then **Run Exported Analysis**. Logs are written to the working directory's `jobs` folder.
+Optional refinement specifies p/q degrees and knot insertion. Kirchhoff-Love shell analysis requires degree at least 2 and internal continuity of at least C¹; a membrane requires degree at least 1 and carries no shell bending stiffness. Degree elevation does not repair an existing C0 discontinuity. Display sampling, spline refinement and integration-point settings control different parts of the workflow.
 
-| File | Purpose |
+New projects disable refinement by default. Disabling it preserves source degrees and control points and omits RefinementModeler; stored settings remain available when refinement is enabled again. Legacy projects without this switch retain their original behavior. Validation blocks a formulation with insufficient source degree. Target degrees must be at least the source degrees and no greater than 8; knot insertions per existing span range from 0 to 100. The quadrature control uses 0 for defaults or 1 to 20 points per span. Output subdivision ranges from 1 to 100.
+
+Strong supports prescribe selected displacement components on supported control-net locations. Shell clamping constrains an adjacent control-point row on a complete natural parametric boundary without introducing independent rotational degrees of freedom. Arbitrary trimmed edges and CAD vertices are not general clamping targets. Penalty supports constrain all three displacement components on a supported boundary curve over the analysis interval; assess the penalty factor for the intended constraint.
+
+Loads include vector surface or edge loads and scalar reference-normal pressure. Pressure sign and explicit reversal determine its direction. The reference normal follows `du × dv` on the reference geometry and need not coincide with a CAD solid's outward normal. Pressure remains tied to the reference configuration in nonlinear analysis; follower pressure is unsupported.
+
+An amplitude table requires at least two finite points with strictly increasing times. Interpolation is piecewise linear, and the load is zero outside its active interval. Table breakpoints do not automatically become solver time steps; choose the time increment accordingly.
+
+Initial velocity and acceleration require dynamic analysis. Nonzero initial displacement requires nonlinear analysis. Initial fields act once during initialization without continuously fixing degrees of freedom.
+
+## 8. Preprocessing inspection and persistence
+
+In **Preview**, select support, load, parameter-direction, reference-normal and material/section layers. **Rebuild Preview** updates them; **Clear Preview** removes them. Use these graphics and counts to inspect assignments. Integration accuracy and mechanical validity require numerical checks.
+
+**Save Project** writes `.ibra-project.json`. In **Output**, **Save to Document** stores document-association data, after which the `.FCStd` document must also be saved. After reopening that document, use **Restore Document**. Preserve referenced STEP and profile files when moving a project. Geometry changes invalidate previous bindings and require the prescribed checks and rebinding.
+
+## 9. Export, initialization and solution
+
+1. Select **Validate Model** and resolve input errors.
+2. Use **Export Analysis Model →** to write the case.
+3. Select **Initialize Exported Model** to check Kratos model initialization.
+4. Select **Run Exported Analysis** to solve the model.
+
+Exports and runs use separate `ibra_case*` and `ibra_run*` directories. Inspect backend status, logs and the run report in **Output**. Initialization establishes that stage's result; a successful solver exit or displayed frame does not establish physical accuracy.
+
+The case separates geometry, refinement, physics assignments, materials and analysis settings:
+
+| File | Role |
 | --- | --- |
-| `geometry.cad.json` | Exact surfaces, trimming boundaries and coupling topology |
-| `refinements.iga.json` | Knot insertion and degree-elevation parameters |
-| `physics.iga.json` | Geometry-to-element, condition and submodel-part assignments |
-| `Materials.json` | Constitutive properties, thicknesses and penalty factors |
-| `ProjectParameters.json` | Modelers, solver, processes and output configuration |
-| `MainKratos.py` | Structural-analysis entry point |
+| `geometry.cad.json` | NURBS geometry, trimming boundaries and coupling topology |
+| `refinements.iga.json` | Degree elevation and knot insertion |
+| `physics.iga.json` | Element, condition and submodel-part assignments |
+| `Materials.json` | Constitutive, section and penalty parameters |
+| `ProjectParameters.json` | Modelers, solver, processes and output settings |
+| `MainKratos.py` | Analysis entry point |
 | `ibra_case_process.py` | Initial-field and interval-dependent load processes |
-| `project.ibra-project.json` | Editable project snapshot |
-| `export_report.json` | Units, notices, checksums and runtime version |
+| `project.ibra-project.json` | Editable analysis-project snapshot |
+| `export_report.json` | Export checks and diagnostics |
 
-The `.iga.json` extensions and official Kratos application, element and modeler identifiers remain unchanged for backend compatibility. CAD geometry alone is not a complete analysis model.
+Exported cases run independently of FreeCAD with the required backend dependencies. Official Kratos identifiers and `.iga.json` extensions remain unchanged for compatibility. CAD geometry alone does not define an analysis.
 
-Exported models run independently of FreeCAD but require the backend dependencies. Run from the downloaded repository root and replace the example directory with the actual export directory:
+For command-line execution, run from the extracted repository root and replace the example directory with the actual export directory:
 
 ```powershell
 & '.\.venv\Scripts\python.exe' '.\ibra_case_example\MainKratos.py' --check
 & '.\.venv\Scripts\python.exe' '.\ibra_case_example\MainKratos.py'
 ```
 
-Initialization does not prove adequate constraints or solver convergence. Successful solution does not replace discretization, penalty-parameter or engineering convergence studies.
 
-## 9. Project persistence
+## 10. Result display
 
-**Save Project** writes `.ibra-project.json`. Reopening reconverts the original STEP and checks source and converted-geometry checksums. Legacy `.iga-project.json` files remain accessible through the generic **Project JSON** file filter.
+1. Choose **Use Last Run**, or select a directory with **Browse Run…**.
+2. Select **Load Result Metadata**.
+3. Choose a frame, displacement X/Y/Z or magnitude, and deformation scale.
+4. Select **Draw Result Frame**. A scale of 0 displays the reference configuration. **Clear Result Display** removes the result layer.
 
-An analysis project is separate from a FreeCAD document: `.FCStd` alone does not preserve the complete analysis configuration. Referenced STEP files, profiles and backend paths must remain available. Project paths are stored relative to the project file where possible. Move the STEP/profile files with the project or update the references after relocation. Geometry changes still require reassignment and verification.
+The reader uses native `results.vtkhdf`. Display subdivision does not modify analysis discretization. Native output lacks complete CAD face/UV mapping, so the displayed mesh does not independently verify the trimmed integration domain. Strong-support `REACTION` and raw penalty RHS are identified separately. The signed physical interpretation of penalty-support reactions remains unverified; these fields do not establish global force balance.
 
-## 10. Example and scope
+## 11. Included examples and recorded validation
 
-The cantilever shell has length 10 mm, width 1 mm, thickness 0.1 mm, Young's modulus 200000 N/mm² and Poisson's ratio 0. Its root is clamped and its end line load is −0.001 N/mm. Analytical tip displacement is −0.02 mm; the verified displacement magnitude is approximately 0.0200000000008 mm.
+Open the following projects with **Open Project** and inspect their settings before running them:
 
-A two-patch cantilever with displacement and rotational coupling yields approximately 0.0200000031 mm, with relative analytical error approximately 1.56×10⁻⁷. The original two-patch input was solved as a membrane. Wing verification covers conversion and indexing of 22 patches and 81 interfaces only; no wing structural solution has been validated.
+| Example | Path relative to the extracted package | Main check |
+| --- | --- | --- |
+| Single-patch cantilever | `freecad/Mod/KratosIBRA/examples/v0_5_cantilever/cantilever.ibra-project.json` | Material, thickness, clamping, load and displacement |
+| Two-patch continuous shell | `freecad/Mod/KratosIBRA/examples/two_patch/two_patch_shell.ibra-project.json` | Interface decisions and shell coupling |
+| Perforated trimmed plate | `freecad/Mod/KratosIBRA/examples/perforated_plate/perforated_plate.ibra-project.json` | Hole, trimmed domain and pressure integration |
 
-This version does not provide independent beams or cables, volumetric parameterization, solid elements, contact, multiphysics coupling, general trimming-point supports, arbitrary space/time expressions or result-field display inside FreeCAD. Kratos 10.4.3 visualization samples the background surface; verify trimming holes and boundaries independently rather than inferring the integration domain from the display mesh. Repeated solution may append visualization time data; export to a fresh directory for independent runs.
+**Open Cantilever Example** opens an earlier example. Use the V0.5 project above for this release's full cantilever case.
 
-Portable tests are in the repository `tests` directory. The installed `examples/cantilever` directory contains the STEP and relative-path project. See [validation evidence](Validation.md); the historical wing model is not distributed here.
+The [validation record](Validation.md) reports a single-patch displacement magnitude of 0.02000000000080121 mm against 0.02 mm analytically, and a two-patch magnitude of 0.1600030769827438 mm against the 0.16 mm reference. For the perforated plate, the recorded integration area is 32.00000000000065 mm²; the pressure-condition RHS sum is approximately [0, 0, 0.032] N. These checks apply to their specified cases and configurations.
+
+## 12. Validation limits
+
+Recorded validation uses Windows x64, FreeCAD 1.1.3 and Kratos 10.4.3. It covers the three designated examples and targeted interface, language and result workflows. Arbitrary STEP trimming configurations require independent assessment.
+
+The release supports surface shells and membranes. General beam, solid, contact and multiphysics analysis, volumetric parameterization and general trimming-point supports are outside its scope. Engineering assessment requires interface-intent review, trimmed-domain integration checks, convergence studies and force-balance verification appropriate to the model. Physical penalty-support reactions and global equilibrium remain unverified.
+
+Mouse workflows were checked using native FreeCAD events and coordinate mapping. Physical mouse operation, navigation styles and display scaling require checks in the intended preview environment. When selection or export is refused, correct the indicated targets or inputs while retaining geometry-invalidation protection.
